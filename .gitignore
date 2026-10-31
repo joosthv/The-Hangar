@@ -1,0 +1,15 @@
+# build output (attached to GitHub releases instead)
+dist/
+
+# test output
+tests/results.txt
+tests/mock/
+
+# secrets: Navigraph client credentials live in %APPDATA%\JetstreamHangar\secrets.json, never in the repository
+secrets.json
+.env
+
+.vs/
+.vscode/
+Thumbs.db
+desktop.ini

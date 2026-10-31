@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "aircraft": [
+    {
+      "id": "aero-at3",
+      "name": "Aero AT-3 R100",
+      "manufacturer": "Aero Sp. z o.o.",
+      "description": "Two-seat Rotax 912 trainer, study level: POH systems and flight model, EFB with checklists, performance, planner, Navigraph charts and a persistent technical state.",
+      "package": "aero-aircraft-at3",
+      "github": "joosthv/aircraft_at3",
+      "tagPrefix": "at3-v",
+      "assetPrefix": "aero-aircraft-at3",
+      "image": ""
+    }
+  ]
+}
