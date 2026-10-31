@@ -4,6 +4,8 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+
+## [1.0.3] - 2026-10-31
 ### Added
 - **Navigraph setup on the Library page**: enter the client ID and secret of the Navigraph API client once; they are
   stored encrypted for your Windows account (DPAPI). Then "Sign in" works as before. Replaces "Not available in this
