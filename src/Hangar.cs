@@ -253,6 +253,7 @@ static class Settings
             if (!s.ContainsKey("selfUpdate")) s["selfUpdate"] = true;     // keep Jetstream Hangar itself up to date
             if (!s.ContainsKey("hangarRepo")) s["hangarRepo"] = "joosthv/The-Hangar";
             if (!s.ContainsKey("navigraphIdentity")) s["navigraphIdentity"] = "https://identity.api.navigraph.com";   // test hook: mock identity server
+            if (!s.ContainsKey("airportsUrl")) s["airportsUrl"] = AirportDb.DefaultUrl;                                   // test hook: mock airport list
         }
     }
     public static Dictionary<string, object> ReadJson(string f)
@@ -274,7 +275,32 @@ static class Settings
                 secrets = ReadJson(Secrets_) ?? ReadJson(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "secrets.json")) ?? new Dictionary<string, object>();
                 if (secrets.Count > 0) Hangar.Log("Navigraph credentials loaded on demand");
             }
-            object v; return secrets.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : "";
+            object v; if (secrets.TryGetValue(k, out v) && v != null && Convert.ToString(v).Length > 0) return Convert.ToString(v);
+            // otherwise the Navigraph client entered on the hangar page (navigraph-client.dat, DPAPI)
+            if (client == null) client = ReadClient() ?? new Dictionary<string, object>();
+            return client.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : "";
+        }
+    }
+    static Dictionary<string, object> client;
+    static string Client_ { get { return Path.Combine(Hangar.DataDir, "navigraph-client.dat"); } }
+    static Dictionary<string, object> ReadClient()
+    {
+        try { return File.Exists(Client_) ? Hangar.Json.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(Client_), null, DataProtectionScope.CurrentUser))) : null; }
+        catch (Exception e) { Hangar.Log("navigraph client credentials unreadable: " + e.Message); return null; }
+    }
+    // Navigraph API client (id + secret from the Navigraph developer portal) entered on the hangar page; empty removes it
+    public static string SetNavigraphClient(string id, string secret)
+    {
+        id = (id ?? "").Trim(); secret = (secret ?? "").Trim();
+        lock (gate)
+        {
+            if (id.Length == 0 && secret.Length == 0) { if (File.Exists(Client_)) File.Delete(Client_); client = new Dictionary<string, object>(); Hangar.Log("navigraph client credentials removed"); return null; }
+            if (!Regex.IsMatch(id, "^[A-Za-z0-9._-]{3,100}$") || secret.Length < 8 || secret.Length > 200 || secret.Any(char.IsWhiteSpace)) return "Enter the client ID and the client secret of your Navigraph API client.";
+            var d = new Dictionary<string, object> { { "navigraphClientId", id }, { "navigraphClientSecret", secret } };
+            File.WriteAllBytes(Client_, ProtectedData.Protect(Encoding.UTF8.GetBytes(Hangar.Json.Serialize(d)), null, DataProtectionScope.CurrentUser));
+            client = d;
+            Hangar.Log("navigraph client credentials stored");
+            return null;
         }
     }
     public static Dictionary<string, object> Public()
@@ -320,9 +346,38 @@ static class Community
         var def = Path.Combine(appData, @"Microsoft Flight Simulator 2024\Packages\Community");
         return Directory.Exists(def) ? def : "";
     }
+    // the SDK package tool starts FlightSimulator2024.exe headless ("... BuildAssetPackages ...") to compile packages;
+    // that is not the sim being flown, so it does not count (the answer per process id is cached: WMI is slow)
+    static readonly Dictionary<int, bool> buildInstance = new Dictionary<int, bool>();
     public static bool SimRunning()
     {
-        return Process.GetProcesses().Any(p => { try { return p.ProcessName.StartsWith("FlightSimulator", StringComparison.OrdinalIgnoreCase); } catch { return false; } });
+        foreach (var p in Process.GetProcesses())
+        {
+            try
+            {
+                if (!p.ProcessName.StartsWith("FlightSimulator", StringComparison.OrdinalIgnoreCase)) continue;
+                bool build;
+                lock (buildInstance)
+                    if (!buildInstance.TryGetValue(p.Id, out build))
+                    {
+                        build = CommandLine(p.Id).IndexOf("BuildAssetPackages", StringComparison.OrdinalIgnoreCase) >= 0;
+                        buildInstance[p.Id] = build;
+                    }
+                if (!build) return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+    static string CommandLine(int pid)
+    {
+        try
+        {
+            using (var s = new System.Management.ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE ProcessId = " + pid))
+                foreach (System.Management.ManagementObject o in s.Get()) return Convert.ToString(o["CommandLine"]) ?? "";
+        }
+        catch { }
+        return "";
     }
     public static string InstalledVersion(string package)
     {
@@ -478,6 +533,7 @@ static class Library
     static DateTime catalogAt = DateTime.MinValue;
     static readonly Dictionary<string, Dictionary<string, object>> latest = new Dictionary<string, Dictionary<string, object>>();
     static readonly Dictionary<string, string> latestErr = new Dictionary<string, string>();
+    static readonly Dictionary<string, DateTime> latestAt = new Dictionary<string, DateTime>();
     public static Dictionary<string, object> Job = new Dictionary<string, object> { { "state", "idle" } };
 
     public static List<Dictionary<string, object>> Arr(object o)
@@ -521,15 +577,26 @@ static class Library
         foreach (var a in Arr(arr))
         {
             string id = S(a, "id"), pkg = S(a, "package");
-            Dictionary<string, object> rel = null; string err = null;
-            lock (gate) { if (!refresh && latest.ContainsKey(id)) rel = latest[id]; if (!refresh && latestErr.ContainsKey(id)) err = latestErr[id]; }
-            if (refresh || (rel == null && err == null))
+            Dictionary<string, object> rel = null; string err = null; bool stale;
+            string inst = Community.InstalledVersion(pkg);
+            TimeSpan age;
+            lock (gate)
+            {
+                if (!refresh && latest.ContainsKey(id)) rel = latest[id]; if (!refresh && latestErr.ContainsKey(id)) err = latestErr[id];
+                age = latestAt.ContainsKey(id) ? DateTime.UtcNow - latestAt[id] : TimeSpan.MaxValue;
+            }
+            // the release list is re-read after 10 minutes (cheap: ETag), and after a minute when the installed version is
+            // newer than the remembered latest one (a release appeared since: "installed 1.1.0, latest 1.0.0")
+            int maxAge = Settings.GetInt("releaseCacheSeconds", 600);   // test hook
+            stale = age > TimeSpan.FromSeconds(maxAge);
+            var iv0 = ParseVersion(inst); var lv0 = rel != null ? ParseVersion(S(rel, "version")) : null;
+            if (iv0 != null && lv0 != null && iv0 > lv0 && age > TimeSpan.FromSeconds(Math.Min(60, maxAge))) stale = true;
+            if (refresh || stale || (rel == null && err == null))
             {
                 try { rel = GitHub.LatestRelease(S(a, "github"), S(a, "tagPrefix"), S(a, "assetPrefix").Length > 0 ? S(a, "assetPrefix") : pkg); err = rel == null ? "No release published yet" : null; }
                 catch (Exception e) { err = "GitHub: " + e.Message; }
-                lock (gate) { latest[id] = rel; latestErr[id] = err; }
+                lock (gate) { latest[id] = rel; latestErr[id] = err; latestAt[id] = DateTime.UtcNow; }
             }
-            string inst = Community.InstalledVersion(pkg);
             var lv = rel != null ? ParseVersion(S(rel, "version")) : null; var iv = ParseVersion(inst);
             var item = new Dictionary<string, object>(a);
             item["installed"] = inst.Length > 0;
@@ -742,6 +809,15 @@ static class Api
         if (path == "/api/check-updates" && m == "POST") { ThreadPool.QueueUserWorkItem(delegate { Hangar.CheckEverything(false); }); Send(res, 202, new Dictionary<string, object>()); return; }
         if (path == "/api/self-update" && m == "POST") { ThreadPool.QueueUserWorkItem(delegate { Hangar.CheckEverything(true); }); Send(res, 202, new Dictionary<string, object>()); return; }
         if (path == "/api/community") { Send(res, 200, CommunityScan.Scan(req.QueryString["refresh"] == "1")); return; }
+        if (path == "/api/airports") { Send(res, 200, AirportDb.Lookup(req.QueryString["icao"] ?? "")); return; }
+        // Navigraph API client entered on the hangar page (page origin or X-Hangar only; never the sim or a web page)
+        if (path == "/api/navigraph/credentials" && m == "POST")
+        {
+            var b = JsonBody(req);
+            var e = Settings.SetNavigraphClient(b.ContainsKey("clientId") ? Convert.ToString(b["clientId"]) : "", b.ContainsKey("clientSecret") ? Convert.ToString(b["clientSecret"]) : "");
+            Send(res, e == null ? 200 : 400, new Dictionary<string, object> { { "error", e }, { "configured", Settings.Secret("navigraphClientId").Length > 0 } });
+            return;
+        }
         if (path == "/api/open-package" && m == "POST") { var e = CommunityScan.OpenFolder(Convert.ToString(JsonBody(req)["folder"])); Send(res, e == null ? 200 : 400, new Dictionary<string, object> { { "error", e } }); return; }
         if (path == "/api/catalog") { Send(res, 200, Library.List(req.QueryString["refresh"] == "1")); return; }
         if (path == "/api/job") { Send(res, 200, Library.Job); return; }
@@ -1198,6 +1274,105 @@ static class NavigraphAuth
     }
 }
 
+// ---------------- airport positions for the scenery map (OurAirports, public domain) ----------------
+// airports.csv is downloaded once into the data folder (about 12 MB, refreshed after 90 days) and read in the background.
+static class AirportDb
+{
+    public const string DefaultUrl = "https://davidmegginson.github.io/ourairports-data/airports.csv";
+    static readonly object gate = new object();
+    static Dictionary<string, Dictionary<string, object>> map;
+    static bool loading; static DateTime lastTry = DateTime.MinValue; static string status = "not loaded";
+    static string File_ { get { return Path.Combine(Hangar.DataDir, "airports.csv"); } }
+
+    public static Dictionary<string, object> Lookup(string icaos)
+    {
+        Dictionary<string, Dictionary<string, object>> m;
+        lock (gate)
+        {
+            m = map;
+            if (m == null && !loading && DateTime.UtcNow - lastTry > TimeSpan.FromMinutes(5))
+            {
+                loading = true; lastTry = DateTime.UtcNow; status = "loading";
+                ThreadPool.QueueUserWorkItem(delegate { Load(); });
+            }
+        }
+        var found = new Dictionary<string, object>();
+        if (m != null)
+            foreach (var c in icaos.ToUpperInvariant().Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).Distinct().Take(2000))
+            {
+                Dictionary<string, object> a; if (m.TryGetValue(c, out a)) found[c] = a;
+            }
+        return new Dictionary<string, object> { { "status", m != null ? "ready" : status }, { "airports", found } };
+    }
+
+    static void Load()
+    {
+        try
+        {
+            var f = File_;
+            if (!File.Exists(f) || DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromDays(90))
+            {
+                try
+                {
+                    var r = (HttpWebRequest)WebRequest.Create(Settings.Get("airportsUrl"));
+                    r.UserAgent = Hangar.AppName + "/" + Hangar.AppVersion; r.Timeout = 60000;
+                    using (var resp = r.GetResponse()) using (var s = resp.GetResponseStream()) using (var o = File.Create(f + ".tmp")) s.CopyTo(o);
+                    if (File.Exists(f)) File.Delete(f);
+                    File.Move(f + ".tmp", f);
+                    Hangar.Log("airport list downloaded");
+                }
+                catch (Exception e) { Hangar.Log("airport list download failed: " + e.Message); if (!File.Exists(f)) throw; }
+            }
+            var m = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+            using (var sr = new StreamReader(f, Encoding.UTF8))
+            {
+                var head = Csv(sr.ReadLine() ?? "");
+                int iIdent = head.IndexOf("ident"), iName = head.IndexOf("name"), iLat = head.IndexOf("latitude_deg"), iLon = head.IndexOf("longitude_deg"),
+                    iIcao = head.IndexOf("icao_code"), iGps = head.IndexOf("gps_code"), iType = head.IndexOf("type");
+                if (iIdent < 0 || iLat < 0 || iLon < 0) throw new Exception("unexpected airports.csv format");
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    var c = Csv(line); if (c.Count <= Math.Max(iLat, iLon)) continue;
+                    double lat, lon;
+                    if (!double.TryParse(c[iLat], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lat) ||
+                        !double.TryParse(c[iLon], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lon)) continue;
+                    var a = new Dictionary<string, object> { { "lat", Math.Round(lat, 4) }, { "lon", Math.Round(lon, 4) }, { "name", iName >= 0 && iName < c.Count ? c[iName] : "" } };
+                    bool closed = iType >= 0 && iType < c.Count && c[iType] == "closed";
+                    if (closed) a["closed"] = true;
+                    // a code belongs to the first airport that uses it, except that an open airport replaces a closed one
+                    foreach (var key in new[] { iIcao >= 0 && iIcao < c.Count ? c[iIcao] : "", iGps >= 0 && iGps < c.Count ? c[iGps] : "", c[iIdent] })
+                    {
+                        if (!Regex.IsMatch(key, "^[A-Z0-9]{3,4}$")) continue;
+                        Dictionary<string, object> old;
+                        if (!m.TryGetValue(key, out old) || (old.ContainsKey("closed") && !closed)) m[key] = a;
+                    }
+                }
+            }
+            lock (gate) { map = m; status = "ready"; }
+            Hangar.Log("airport list loaded: " + m.Count + " codes");
+        }
+        catch (Exception e) { lock (gate) status = "unavailable: " + e.Message; Hangar.Log("airport list unavailable: " + e.Message); }
+        finally { lock (gate) loading = false; }
+    }
+
+    // one CSV line (quoted fields, "" inside quotes)
+    static List<string> Csv(string line)
+    {
+        var o = new List<string>(); var sb = new StringBuilder(); bool q = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char ch = line[i];
+            if (q) { if (ch == '"') { if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; } else q = false; } else sb.Append(ch); }
+            else if (ch == '"') q = true;
+            else if (ch == ',') { o.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(ch);
+        }
+        o.Add(sb.ToString());
+        return o;
+    }
+}
+
 // ---------------- what is in the Community folder (scenery overview) ----------------
 // Reads every package folder: manifest.json (title, creator, content_type, version, size) and ContentHistory.json
 // (airports by ICAO). Linked folders (junctions / symlinks, common with add-on managers) are followed and flagged.
@@ -1238,9 +1413,13 @@ static class CommunityScan
                             item["version"] = S(man, "package_version");
                             long size; if (long.TryParse(S(man, "total_package_size"), out size) && size > 0) item["sizeMB"] = Math.Round(size / 1048576.0, 1);
                         }
-                        var airports = Airports(dir, name);
+                        item["contentType"] = item["type"];
+                        // navigation data (Navigraph nav-base / Jeppesen, AIRAC cycles) is not scenery to the user
+                        if (Regex.IsMatch(name + " " + item["title"], "navdata|nav-data|navigraph-nav|nav-base|nav-jepp|\\bairac\\b|navdb", RegexOptions.IgnoreCase)) item["type"] = "NAVDATA";
+                        var airports = Convert.ToString(item["type"]) == "NAVDATA" ? Tuple.Create(new List<string>(), false) : Airports(dir, name);
                         item["airports"] = airports.Item1.ToArray();
                         item["airportsGuessed"] = airports.Item2;
+                        if (Convert.ToString(item["type"]) == "SCENERY" && airports.Item1.Count > 0) item["type"] = "AIRPORT";
                     }
                     catch (Exception e) { item["type"] = "UNKNOWN"; item["title"] = name; item["problem"] = e.Message; }
                     string t = Convert.ToString(item["type"]);

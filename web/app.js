@@ -166,22 +166,71 @@ $("#refresh").onclick = async () => {
 };
 // ---------------- Community folder overview (scenery and every other package) ----------------
 let scan = null;
-const typeNames = { SCENERY: "Scenery", AIRCRAFT: "Aircraft", LIVERY: "Liveries", MISC: "Misc / libraries", INSTRUMENTS: "Instruments", CORE: "Core", UNKNOWN: "Unknown / broken" };
+const typeNames = { AIRPORT: "Airports", SCENERY: "Other scenery", NAVDATA: "Nav data (AIRAC)", AIRCRAFT: "Aircraft", LIVERY: "Liveries", MISC: "Misc / libraries", INSTRUMENTS: "Instruments", CORE: "Core", UNKNOWN: "Unknown / broken" };
+const typeOrder = ["AIRPORT", "SCENERY", "AIRCRAFT", "LIVERY", "MISC", "INSTRUMENTS", "CORE", "NAVDATA", "UNKNOWN"];
 async function loadScan(refresh) {
     $("#scanCount").textContent = "Scanning...";
     try { scan = (await api("community" + (refresh ? "?refresh=1" : ""))).j; } catch (e) { $("#scanCount").textContent = "Scan failed: " + e; return; }
-    const sel = $("#scanType"), cur = sel.value || "SCENERY";
-    const types = Object.keys(scan.counts || {}).sort();
+    const sel = $("#scanType"), cur = sel.value || "AIRPORT";
+    const rank = t => typeOrder.indexOf(t) < 0 ? 50 : typeOrder.indexOf(t);
+    const types = Object.keys(scan.counts || {}).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     const total = (scan.packages || []).length;
     sel.innerHTML = `<option value="ALL">All packages (${total})</option>` + types.map(t => `<option value="${esc(t)}">${esc(typeNames[t] || t)} (${scan.counts[t]})</option>`).join("");
-    sel.value = types.indexOf(cur) >= 0 || cur === "ALL" ? cur : (types.indexOf("SCENERY") >= 0 ? "SCENERY" : "ALL");
+    sel.value = types.indexOf(cur) >= 0 || cur === "ALL" ? cur : (types.indexOf("AIRPORT") >= 0 ? "AIRPORT" : "ALL");
     renderScan();
 }
+function scanRows() {
+    const q = $("#scanSearch").value.trim().toLowerCase(), type = $("#scanType").value;
+    return (scan.packages || []).filter(p => (type === "ALL" || p.type === type) &&
+        (!q || [p.title, p.creator, p.folder].concat(p.airports || []).some(v => String(v || "").toLowerCase().indexOf(q) >= 0)));
+}
+// ---- world map of the airports in the Community folder (Leaflet, OpenStreetMap tiles; positions from the hangar) ----
+let map = null, mapLayer = null, mapTimer = null, showMap = false;
+async function renderMap(rows) {
+    const note = $("#mapNote");
+    if (typeof L === "undefined") { note.textContent = "The map needs an internet connection (map library could not be loaded)."; return; }
+    if (!map) {
+        map = L.map("map", { worldCopyJump: true, minZoom: 2 }).setView([30, 0], 2);
+        // OpenStreetMap tiles (no key), darkened with a CSS filter to match the page (.darktiles in style.css)
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            { maxZoom: 18, className: "darktiles", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+        mapLayer = L.layerGroup().addTo(map);
+    }
+    setTimeout(() => map.invalidateSize(), 0);
+    const icaos = [...new Set(rows.flatMap(p => p.airports || []))];
+    if (!icaos.length) { mapLayer.clearLayers(); note.textContent = "No airports in this selection."; return; }
+    const { j } = await api("airports?icao=" + encodeURIComponent(icaos.join(",")));
+    clearTimeout(mapTimer);
+    if (j.status !== "ready") {
+        note.textContent = j.status === "loading" ? "Loading the airport list (first time: about 12 MB)..." : "Airport positions unavailable: " + j.status;
+        if (j.status === "loading" || j.status === "not loaded") mapTimer = setTimeout(() => showMap && renderMap(scanRows()), 2000);
+        return;
+    }
+    mapLayer.clearLayers();
+    const pts = [], missing = [];
+    for (const p of rows) for (const icao of p.airports || []) {
+        const a = j.airports[icao]; if (!a) { missing.push(icao); continue; }
+        pts.push([a.lat, a.lon]);
+        L.circleMarker([a.lat, a.lon], { radius: 7, weight: 2, color: p.airportsGuessed ? "#d29922" : "#2f81f7", fillColor: p.airportsGuessed ? "#d29922" : "#2f81f7", fillOpacity: .55, dashArray: p.airportsGuessed ? "3 3" : null })
+            .bindTooltip(icao, { permanent: pts.length <= 40, direction: "top", offset: [0, -6], className: "icaotip" })
+            .bindPopup(`<b>${esc(icao)}</b> ${esc(a.name)}<br>${esc(p.title)}${p.creator ? "<br><span class='muted'>" + esc(p.creator) + "</span>" : ""}${p.airportsGuessed ? "<br><i>ICAO guessed from the folder name</i>" : ""}`)
+            .addTo(mapLayer);
+    }
+    if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 });
+    note.textContent = pts.length + " airports on the map" + (missing.length ? " - no position for " + missing.join(", ") : "") + ". Dashed: ICAO guessed from the folder name.";
+}
+function setMapMode(on) {
+    showMap = on;
+    $("#showMap").classList.toggle("active", on); $("#showList").classList.toggle("active", !on);
+    $("#mapWrap").classList.toggle("hidden", !on);
+    renderScan();
+}
+$("#showList").onclick = () => setMapMode(false);
+$("#showMap").onclick = () => setMapMode(true);
 function renderScan() {
     if (!scan) return;
-    const q = $("#scanSearch").value.trim().toLowerCase(), type = $("#scanType").value;
-    const rows = (scan.packages || []).filter(p => (type === "ALL" || p.type === type) &&
-        (!q || [p.title, p.creator, p.folder].concat(p.airports || []).some(v => String(v || "").toLowerCase().indexOf(q) >= 0)));
+    const rows = scanRows();
+    if (showMap) renderMap(rows);
     $("#scanCount").textContent = rows.length + " shown - " + (scan.community || "no Community folder") + " - scanned " + scan.scanned;
     $("#scanList").innerHTML = rows.map(p => `<div class="pkg">
         <div class="t">${esc(p.title)}</div>
@@ -210,7 +259,8 @@ async function ngRefresh() {
     let s;
     try { s = (await api("navigraph/session")).j; } catch (e) { return; }
     const st = $("#ngState"), waiting = s.state === "waiting" || s.state === "starting";
-    st.textContent = !s.configured ? "Not available in this installation" : s.state === "in" ? "Signed in" + (s.user ? " as " + s.user : "") :
+    $("#ngSetup").classList.toggle("hidden", !!s.configured);
+    st.textContent = !s.configured ? "Set up the Navigraph API client to sign in" : s.state === "in" ? "Signed in" + (s.user ? " as " + s.user : "") :
         waiting ? "Waiting for your approval" : s.state === "error" ? s.message : "Not signed in" + (s.message ? " - " + s.message : "");
     st.style.color = s.state === "in" ? "var(--ok)" : s.state === "error" ? "var(--bad)" : "";
     $("#ngLogin").classList.toggle("hidden", s.state === "in" || waiting || !s.configured);
@@ -234,6 +284,12 @@ async function ngRefresh() {
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ngRefresh(); });
 $("#ngLogin").onclick = async () => { ngLastCode = ""; const { ok, j } = await post("navigraph/login"); if (!ok) notice("Navigraph: " + (j.error || "sign-in could not start"), true); ngRefresh(); };
+$("#ngSetup").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = ev.target, { ok, j } = await post("navigraph/credentials", { clientId: f.clientId.value, clientSecret: f.clientSecret.value });
+    $("#ngSetupMsg").textContent = ok ? "" : j.error || "Could not store the credentials";
+    if (ok) { f.reset(); await loadStatus(); ngRefresh(); }
+};
 $("#ngCancel").onclick = async () => { await post("navigraph/cancel"); ngRefresh(); };
 $("#ngLogout").onclick = async () => { if (confirm("Sign out of Navigraph? The EFBs lose access to charts until you sign in again.")) { await post("navigraph/logout"); ngRefresh(); } };
 

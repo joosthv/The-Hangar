@@ -4,6 +4,24 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+### Added
+- **Navigraph setup on the Library page**: enter the client ID and secret of the Navigraph API client once; they are
+  stored encrypted for your Windows account (DPAPI). Then "Sign in" works as before. Replaces "Not available in this
+  installation".
+- **Scenery world map**: "World map" shows every airport of your Community folder on a map (OpenStreetMap), with
+  ICAO labels and the package per airport. Positions come from the public OurAirports list, downloaded once
+  (about 12 MB) into the data folder.
+- Aircraft image on the catalogue card (Aero AT-3).
+
+### Changed
+- Scenery opens on **Airports**; navigation data (Navigraph nav-base / Jeppesen, AIRAC) has its own "Nav data" type
+  and scenery without airports (GSX and similar) is "Other scenery".
+
+### Fixed
+- "MSFS running" while it was not: the SDK package tool starts the sim headless to build packages; that no longer
+  counts.
+- "Installed 1.1.0, latest 1.0.0": the remembered release list is read again after 10 minutes, and after a minute
+  when the installed version is newer than the latest known one.
 
 ## [1.0.2] - 2026-10-31
 ### Added

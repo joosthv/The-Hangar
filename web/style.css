@@ -83,4 +83,16 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .chip.link { cursor: pointer; text-decoration: underline; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand img.logo { width: 34px; height: 34px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: var(--panel); color: var(--muted); border-radius: 0; padding: 7px 14px; font-weight: 600; }
+.seg button.active { background: var(--accent2); color: #fff; }
+#map { height: 520px; border-radius: 12px; border: 1px solid var(--line); background: #0b1d33; }
+#mapWrap { margin-bottom: 16px; }
+.darktiles { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6); }
+.leaflet-popup-content { font: 13px/1.45 "Segoe UI", sans-serif; }
+.leaflet-tooltip.icaotip { background: #0d1117; color: #a5c8ff; border: 1px solid #1f6feb; font: 600 11px Consolas, monospace; padding: 1px 5px; box-shadow: none; }
+.leaflet-tooltip.icaotip::before { display: none; }
+.ngsetup { display: block; max-width: none; margin-top: 12px; gap: 0; }
+.ngsetup .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ngsetup input { flex: 1 1 200px; }
 .tagline { font-size: 11px; font-weight: 400; color: #9aa4ae; letter-spacing: .2px; }

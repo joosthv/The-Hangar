@@ -44,7 +44,7 @@ for ($i = 0; $i -lt $sizes.Count; $i++) { $d = if ($sizes[$i] -ge 256) { 0 } els
 foreach ($p in $pngs) { $w.Write($p) }
 $w.Close()
 $res = Get-ChildItem (Join-Path $here "web") -File | % { "/resource:$($_.FullName),web.$($_.Name)" }
-$refs = "System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll", "System.Web.Extensions.dll", "System.Security.dll", "$fw\System.IO.Compression.dll", "$fw\System.IO.Compression.FileSystem.dll" | % { "/reference:$_" }
+$refs = "System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll", "System.Web.Extensions.dll", "System.Security.dll", "System.Management.dll","$fw\System.IO.Compression.dll", "$fw\System.IO.Compression.FileSystem.dll" | % { "/reference:$_" }
 & $csc /nologo /target:winexe /optimize+ "/win32icon:$ico" "/out:$OutDir\JetstreamHangar.exe" $refs $res (Join-Path $here "src\Hangar.cs") $gen
 $ok = $LASTEXITCODE -eq 0
 Remove-Item $gen, $ico -ErrorAction SilentlyContinue

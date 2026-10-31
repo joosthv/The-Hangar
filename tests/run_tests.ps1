@@ -68,8 +68,8 @@ $c = MakeZip "test-pkg-c" "1.0.0"
 Utf8NoBom "$c.sha256" ("0" * 64)
 WriteReleases "test\c" @((Release "at3-v1.0.0" @((Asset "test-pkg-c-1.0.0.zip" (Get-Item $c).Length), (Asset "test-pkg-c-1.0.0.zip.sha256" 64))))
 WriteReleases "test\d" @()
-$e = MakeZip "test-pkg-e" "3.2.1" -flat
-WriteReleases "test\e" @((Release "v3.2.1" @(Asset "test-pkg-e-3.2.1.zip" (Get-Item $e).Length)))
+$eZip = MakeZip "test-pkg-e" "3.2.1" -flat
+WriteReleases "test\e" @((Release "v3.2.1" @(Asset "test-pkg-e-3.2.1.zip" (Get-Item $eZip).Length)))
 $cat = @{ version = 1; aircraft = @(
     @{ id = "a"; name = "Aircraft A"; package = "test-pkg-a"; github = "test/a"; tagPrefix = "at3-v"; assetPrefix = "test-pkg-a" },
     @{ id = "b"; name = "Aircraft B"; package = "test-pkg-b"; github = "test/b"; tagPrefix = "at3-v" },
@@ -236,6 +236,14 @@ Section "API security (browser pages cannot drive the hangar)"
     Check ((Get-Content (Join-Path $preA "manifest.json") -Raw | ConvertFrom-Json).package_version -eq "1.0.0") "nothing installed while MSFS runs"
     $r = Call POST "/api/install" '{"id":"a"}'; Check ($r.status -eq 409 -and $r.json.error -match "Close Microsoft Flight Simulator") "manual install refused while MSFS runs"
     Stop-Process -Id $sim.Id -Force
+    Check (WaitUntil { -not (Call GET "/api/status").json.simRunning } 5) "MSFS closed again"
+    # the SDK package tool starts the sim headless with "BuildAssetPackages": that is not the sim being flown
+    $fakeBuild = Join-Path $T "build\FlightSimulator2024.exe"; New-Item -ItemType Directory -Force (Split-Path $fakeBuild) | Out-Null; Copy-Item "$env:SystemRoot\System32\cmd.exe" $fakeBuild
+    $bsim = Start-Process $fakeBuild -ArgumentList '/c "ping -n 20 127.0.0.1 >nul & rem BuildAssetPackages C:\x.xml"' -WindowStyle Hidden -PassThru
+    Start-Sleep -Seconds 1
+    $stB = (Call GET "/api/status").json
+    Check ($stB.simRunning -eq $false) "package build (FlightSimulator2024 BuildAssetPackages) is not counted as MSFS running"
+    Stop-Process -Id $bsim.Id -Force -ErrorAction SilentlyContinue
     $done = WaitUntil { (Get-Content (Join-Path $preA "manifest.json") -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).package_version -eq "1.1.0" } 20
     Check $done "installed automatically once MSFS was closed"
     Check (((Call GET "/api/status").json.waiting).Count -eq 0) "nothing waiting afterwards"
@@ -406,6 +414,36 @@ Section "API security (browser pages cannot drive the hangar)"
     Utf8NoBom (Join-Path $data "secrets.json") '{}'
     StopAll; $p10 = StartInstance $exe3 $sn
     $r = Call POST "/api/navigraph/login" "" $null $page; Check ($r.status -eq 503 -and $r.json.error -eq "navigraph_not_configured") "no credentials installed: clear error"
+
+    Section "Navigraph API client entered on the hangar page"
+    $cred = '{"clientId":"ui-client","clientSecret":"ui-secret-123456"}'
+    Check ((Call POST "/api/navigraph/credentials" $cred $null "https://evil.example").status -eq 403) "a web page cannot set the credentials"
+    Check ((Call POST "/api/navigraph/credentials" $cred $null "coui://html_ui").status -eq 403) "the sim cannot set the credentials"
+    $r = Call POST "/api/navigraph/credentials" '{"clientId":"bad id!","clientSecret":"x"}' $null $page; Check ($r.status -eq 400 -and $r.json.error) "invalid credentials rejected ($($r.json.error))"
+    $r = Call POST "/api/navigraph/credentials" $cred $null $page; Check ($r.status -eq 200 -and $r.json.configured -eq $true) "credentials stored from the hangar page"
+    $cdat = Join-Path $data "navigraph-client.dat"
+    Check ((Test-Path $cdat) -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($cdat)) -match "ui-secret")) "stored encrypted (DPAPI), not in plain text"
+    Check ((Call GET "/api/settings").text -notmatch "ui-secret" -and (Call GET "/api/navigraph/session").text -notmatch "ui-secret") "the secret is never returned"
+    StopAll; $p10b = StartInstance $exe3 $sn
+    Check ((Call GET "/api/ping").json.navigraph -eq $true -and (Call GET "/api/navigraph/session").json.configured -eq $true) "configured after a restart (EFB backend ready)"
+    Remove-Item (Join-Path $mock "identity.log"), (Join-Path $mock "tokencount") -ErrorAction SilentlyContinue
+    Call POST "/api/navigraph/login" "" $null $page | Out-Null
+    WaitUntil { (Call GET "/api/navigraph/session").json.state -eq "in" } 15 | Out-Null
+    $dev = Get-Content (Join-Path $mock "identity.log") -ErrorAction SilentlyContinue | ? { $_ -like "identity/connect/deviceauthorization*" } | Select-Object -First 1
+    Check ($dev -match "client_id=ui-client" -and $dev -match "client_secret=ui-secret-123456") "sign-in uses the entered client"
+    Call POST "/api/navigraph/logout" "" $null $page | Out-Null
+    $r = Call POST "/api/navigraph/credentials" '{"clientId":"","clientSecret":""}' $null $page; Check ($r.json.configured -eq $false -and -not (Test-Path $cdat)) "empty credentials remove them"
+    StopAll
+
+    Section "release list re-read when it is old"
+    $sr = $baseSettings.Clone(); $sr.autoUpdate = $false; $sr.selfUpdate = $false; $sr.releaseCacheSeconds = 3
+    $p10c = StartInstance $exe3 $sr
+    Check (((Call GET "/api/catalog").json | ? id -eq "e").latestVersion -eq "3.2.1") "E: latest 3.2.1"
+    WriteReleases "test\e" @((Release "v3.3.0" @(Asset "test-pkg-e-3.3.0.zip" 1)), (Release "v3.2.1" @(Asset "test-pkg-e-3.2.1.zip" (Get-Item $eZip).Length)))
+    Check (((Call GET "/api/catalog").json | ? id -eq "e").latestVersion -eq "3.2.1") "remembered while fresh (no GitHub request per page view)"
+    Start-Sleep -Seconds 4
+    Check (((Call GET "/api/catalog").json | ? id -eq "e").latestVersion -eq "3.3.0") "new release shown without a manual refresh once the list is old"
+    WriteReleases "test\e" @((Release "v3.2.1" @(Asset "test-pkg-e-3.2.1.zip" (Get-Item $eZip).Length)))
     StopAll
 
     # ================= scenery overview =================
@@ -420,16 +458,35 @@ Section "API security (browser pages cannot drive the hangar)"
     Pkg "orbx-ybbn-brisbane" "SCENERY" "Brisbane" $null
     Pkg "aero-aircraft-at3" "AIRCRAFT" "Aero AT-3" $null
     Pkg "broken-folder" $null $null $null
+    Pkg "navigraph-nav-base" "SCENERY" "Navigraph Navdata Base" '{ "items": [ { "type": "Airport", "content": "EGLL" } ] }'
+    Pkg "fsdreamteam-gsx-pro" "SCENERY" "GSX Pro" $null
+    Utf8NoBom (Join-Path $mock "airports.csv") (@(
+        '"id","ident","type","name","latitude_deg","longitude_deg","elevation_ft","continent","iso_country","iso_region","municipality","scheduled_service","icao_code","iata_code","gps_code","local_code"',
+        '1,"EHAM","large_airport","Amsterdam Airport Schiphol",52.308601,4.76389,-11,"EU","NL","NL-NH","Amsterdam","yes","EHAM","AMS","EHAM",""',
+        '2,"EHLE","medium_airport","Lelystad Airport",52.4603,5.52722,-13,"EU","NL","NL-FL","Lelystad","yes","EHLE","LEY","EHLE",""',
+        '3,"XX-1","closed","Old Brisbane, closed",-27.40,153.10,0,"OC","AU","AU-QLD","Brisbane","no","","","YBBN",""',
+        '4,"YBBN","large_airport","Brisbane International Airport",-27.384199,153.117004,13,"OC","AU","AU-QLD","Brisbane","yes","YBBN","BNE","YBBN",""') -join "`n")
     New-Item -ItemType Directory -Force (Join-Path $sc ".hangar_new_x") | Out-Null
     $target = Join-Path $T "ExternalScenery"; New-Item -ItemType Directory -Force $target | Out-Null
     Utf8NoBom (Join-Path $target "manifest.json") '{ "content_type": "SCENERY", "title": "Linked Scenery" }'
     cmd /c mklink /J (Join-Path $sc "linked-scenery") $target | Out-Null
-    $ss = $baseSettings.Clone(); $ss.communityOverride = $sc; $ss.autoUpdate = $false; $ss.selfUpdate = $false
+    $ss = $baseSettings.Clone(); $ss.communityOverride = $sc; $ss.autoUpdate = $false; $ss.selfUpdate = $false; $ss.airportsUrl = "http://localhost:8766/airports.csv"
+    Remove-Item (Join-Path $data "airports.csv") -ErrorAction SilentlyContinue
     $p11 = StartInstance $exe3 $ss
     $scan = (Call GET "/api/community?refresh=1").json
     $byFolder = @{}; $scan.packages | % { $byFolder[$_.folder] = $_ }
-    Check ($scan.packages.Count -eq 5) "five packages, our temporary folder skipped ($($scan.packages.Count))"
-    Check ($scan.counts.SCENERY -eq 3 -and $scan.counts.AIRCRAFT -eq 1 -and $scan.counts.UNKNOWN -eq 1) "counted by type"
+    Check ($scan.packages.Count -eq 7) "seven packages, our temporary folder skipped ($($scan.packages.Count))"
+    Check ($scan.counts.AIRPORT -eq 2 -and $scan.counts.SCENERY -eq 2 -and $scan.counts.NAVDATA -eq 1 -and $scan.counts.AIRCRAFT -eq 1 -and $scan.counts.UNKNOWN -eq 1) "counted by kind: airports, other scenery, nav data"
+    $nv = $byFolder["navigraph-nav-base"]
+    Check ($nv.type -eq "NAVDATA" -and $nv.contentType -eq "SCENERY" -and @($nv.airports).Count -eq 0) "Navigraph nav data is not shown as airport scenery"
+    Check ($byFolder["fsdreamteam-gsx-pro"].type -eq "SCENERY") "scenery without airports stays 'other scenery'"
+    $ap = $null; $ready = WaitUntil { $script:ap = (Call GET "/api/airports?icao=EHAM,ybbn,ZZZZ").json; $ap.status -eq "ready" } 15
+    Check $ready "airport list downloaded and loaded in the background ($($ap.status))"
+    Check ($ap.airports.EHAM.lat -eq 52.3086 -and $ap.airports.EHAM.lon -eq 4.7639 -and $ap.airports.EHAM.name -eq "Amsterdam Airport Schiphol") "EHAM position and name"
+    Check ($ap.airports.YBBN.name -eq "Brisbane International Airport") "open airport wins over a closed one with the same code"
+    Check (-not $ap.airports.ZZZZ) "unknown code has no position"
+    Check (Test-Path (Join-Path $data "airports.csv")) "airport list kept in the data folder"
+    Check ((Call GET "/api/airports?icao=EHAM" $null $null "https://evil.example").status -eq 403) "a web page cannot query the hangar"
     $e = $byFolder["flytampa-eham-amsterdam"]
     Check ((($e.airports) -join ",") -eq "EHAM,EHLE" -and $e.airportsGuessed -eq $false) "airports from ContentHistory.json (EHAM, EHLE; other items ignored)"
     Check ($e.creator -eq "Test Studio" -and $e.version -eq "1.2.3" -and $e.sizeMB -eq 100) "creator, version and size from the manifest"

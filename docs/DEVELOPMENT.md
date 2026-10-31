@@ -77,11 +77,25 @@ sign-in stops. authorization_pending / slow_down (+5 s) / access_denied / expire
 token request always carries `scope`. Refresh token stored DPAPI-encrypted in `navigraph.dat` and rotated on every
 refresh; `GET /api/navigraph/access` returns a valid access token (refreshing when needed) to the sim only.
 `navigraphIdentity` setting = identity base URL (tests point it at the mock server).
+Client credentials: `secrets.json` first, else `navigraph-client.dat` (DPAPI) entered on the Library page
+(`POST /api/navigraph/credentials {clientId, clientSecret}`, page origin only; empty values remove it). Note for
+Claude: files written from the sandboxed shell under `%APPDATA%` may not be visible to the real hangar process
+(that is why 1.0.1/1.0.2 said "not configured"); check from a normal process (a .bat started through explorer.exe).
 
 ### Community overview (`CommunityScan`)
 `GET /api/community[?refresh=1]`: every package folder (skips `.hangar_*`), manifest fields, airports from
 `ContentHistory.json` items of type Airport (root or `ContentInfo\**`), otherwise a guess from the folder name
 (first part = developer, skipped), linked folders (reparse points) flagged. Cached 60 s.
+`type` is the kind shown in the UI: `NAVDATA` (navdata / navigraph-nav / nav-base / nav-jepp / AIRAC in name or
+title, no airports), `AIRPORT` (scenery with airports), `SCENERY` (other scenery), else the manifest type;
+`contentType` keeps the manifest value. World map: `GET /api/airports?icao=A,B` returns positions from OurAirports
+`airports.csv` (setting `airportsUrl`, downloaded to the data folder, refreshed after 90 days, loaded in the
+background: `status` loading/ready/unavailable). The page draws them with Leaflet 1.9.4 (cdnjs) on OpenStreetMap
+tiles darkened by CSS (CARTO tiles need a key now).
+`Community.SimRunning` ignores `FlightSimulator*` processes started by the SDK package tool (`BuildAssetPackages`
+on the command line, read with WMI, cached per pid).
+Release lists: remembered per aircraft, re-read after `releaseCacheSeconds` (600) or after 60 s when the installed
+version is newer than the remembered latest one.
 
 ### Update checks
 `Hangar.CheckEverything`: self-update first (applied when `selfUpdate` is on or the user pressed "update"),
@@ -99,6 +113,8 @@ then the aircraft. `POST /api/check-updates` (page button, tray item), `POST /ap
 | GET/POST | `/api/settings` | see table above |
 | POST | `/api/open-community` | opens Explorer |
 | GET | `/api/community[?refresh=1]` | Community folder overview |
+| GET | `/api/airports?icao=EHAM,LIRQ` | airport positions for the world map |
+| POST | `/api/navigraph/credentials` | Navigraph API client id + secret (page only) |
 | POST | `/api/open-package` | `{ "folder": "..." }` opens a package folder (must be inside Community) |
 | POST | `/api/check-updates`, `/api/self-update` | update checks (see above) |
 | GET | `/api/navigraph/session` | sign-in state (+ code while waiting); also the heartbeat |

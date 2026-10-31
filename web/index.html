@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jetstream Hangar</title>
 <link rel="icon" type="image/svg+xml" href="logo.svg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -38,6 +39,16 @@
           <p class="muted">Or scan the QR code with your phone. Keep this page open until you have approved.</p>
         </div>
       </div>
+      <form id="ngSetup" class="ngsetup hidden" autocomplete="off">
+        <p class="muted">Enter the client ID and client secret of the Navigraph API client (Navigraph developer portal). They are
+          stored encrypted for your Windows account and only sent to Navigraph.</p>
+        <div class="row">
+          <input name="clientId" placeholder="Client ID" spellcheck="false">
+          <input name="clientSecret" type="password" placeholder="Client secret">
+          <button type="submit">Save</button>
+        </div>
+        <p id="ngSetupMsg" class="small" style="color: var(--bad)"></p>
+      </form>
       <p class="muted small">Your Navigraph sign-in is used by the aircraft EFBs for charts. It stays on this computer.</p>
     </section>
     <div id="cards" class="cards"></div>
@@ -50,14 +61,16 @@
     <div class="filters">
       <input id="scanSearch" type="search" placeholder="Search name, creator, ICAO or folder">
       <select id="scanType"></select>
+      <div class="seg"><button id="showList" class="active" type="button">List</button><button id="showMap" type="button">World map</button></div>
       <span id="scanCount" class="muted"></span>
     </div>
+    <div id="mapWrap" class="hidden"><div id="map"></div><p id="mapNote" class="muted small"></p></div>
     <div id="scanList" class="pkglist"></div>
   </section>
   <section id="settings" class="view hidden">
     <h1>Settings</h1>
     <form id="settingsForm">
-      <label>Catalogue URL<input name="catalogUrl" placeholder="https://api.github.com/repos/joosthv/The-Hangar/contents/catalog.json"><small>catalog.json listing the aircraft and their GitHub repositories (default: the The-Hangar repository). Empty: the catalog.json next to the program.</small></label>
+      <label>Catalogue URL<input name="catalogUrl" placeholder="https://raw.githubusercontent.com/joosthv/The-Hangar/main/catalog.json"><small>catalog.json listing the aircraft and their GitHub repositories (default: the The-Hangar repository). Empty: the catalog.json next to the program.</small></label>
       <label>Community folder<input name="communityOverride" placeholder=""><small id="detected"></small></label>
       <label>GitHub token (optional)<input name="githubToken" type="password" autocomplete="off" placeholder="only needed for private repositories or rate limits"><small>Needed while the repository is private. Stored on this computer; sent only to api.github.com.</small></label>
       <label>Check for updates every<select name="checkHours"><option value="1">hour</option><option value="6">6 hours</option><option value="24">day</option></select></label>
@@ -84,6 +97,7 @@
     </div>
   </article>
 </template>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="qr.js"></script>
 <script src="app.js"></script>
 </body>
