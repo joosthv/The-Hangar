@@ -4,6 +4,8 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+
+## [1.0.4] - 2026-10-31
 ### Changed
 - **New look** in the Jetstream Virtual style: sidebar with the compass rose and a system-status panel (annunciator
   lights), IBM Plex type, slate colours, version / download figures as a data strip, release notes formatted from the
