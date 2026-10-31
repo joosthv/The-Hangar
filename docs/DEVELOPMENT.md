@@ -76,5 +76,6 @@ only to the API), auto-update waiting for a stand-in `FlightSimulator2024.exe`, 
 9.9.9 and a rejected corrupt self-update.
 
 ## 5. Open items
-- Repositories are private: every user needs a GitHub token in Settings until they are made public.
+- The-Hangar is public: it holds the catalogue, the hangar releases (`hangar-v*`) and the aircraft releases
+  (`at3-v*`, ...), so no user needs a token. Aircraft source repositories (e.g. joosthv/aircraft_at3) stay private.
 - Code signing of the exe (SmartScreen), an installer, aircraft images in the catalogue, download resume.

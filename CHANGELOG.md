@@ -4,6 +4,9 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+### Changed
+- This repository is public and also carries the aircraft releases (`at3-v*`), so no GitHub token is needed;
+  aircraft source code stays in private repositories.
 
 ## [1.0.0] - 2026-10-31
 First release.

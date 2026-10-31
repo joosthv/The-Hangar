@@ -6,7 +6,8 @@ backend for the aircraft EFBs (Navigraph sign-in, technical state). A tray app w
 
 ## Aircraft catalogue
 `catalog.json` in this repository lists the aircraft. Each entry points at the GitHub repository whose releases carry
-the package:
+the package - normally this public repository (aircraft source code lives in private repositories, only the release
+zips are published here):
 
 ```json
 {
@@ -15,7 +16,7 @@ the package:
   "manufacturer": "Aero Sp. z o.o.",
   "description": "...",
   "package": "aero-aircraft-at3",
-  "github": "joosthv/aircraft_at3",
+  "github": "joosthv/The-Hangar",
   "tagPrefix": "at3-v",
   "assetPrefix": "aero-aircraft-at3",
   "image": ""
