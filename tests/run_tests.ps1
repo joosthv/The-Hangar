@@ -15,8 +15,11 @@ function Check($cond, $msg) { if ($cond) { $script:results.Add("  PASS  $msg") }
 function Section($name) { $script:results.Add("[$name]") }
 
 # ---- HTTP helper that returns status + parsed JSON for any status code ----
-function Call($method, $path, $body, $contentType) {
+function Call($method, $path, $body, $contentType, $origin, $hostHeader) {
     $req = [Net.HttpWebRequest]::Create("$base$path"); $req.Method = $method; $req.Timeout = 60000
+    # scripts identify themselves with X-Hangar (browsers cannot send it cross-origin); tests can fake an Origin or Host
+    if ($origin) { $req.Headers["Origin"] = $origin } else { $req.Headers["X-Hangar"] = "1" }
+    if ($hostHeader) { $req.Host = $hostHeader }
     if ($body -ne $null) {
         $req.ContentType = if ($contentType) { $contentType } else { "application/json" }
         $b = [Text.Encoding]::UTF8.GetBytes($body); $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
@@ -102,6 +105,18 @@ try {
     $set = (Call GET "/api/settings").json
     Check ($set.githubToken -eq "set" -and $set.githubToken -ne "secret-token-xyz") "GitHub token never returned to the UI"
 
+Section "API security (browser pages cannot drive the hangar)"
+    $evil = "https://evil.example"
+    $r = Call POST "/api/install" '{"id":"e"}' $null $evil; Check ($r.status -eq 403) "install from a foreign web page refused"
+    $before = (Call GET "/api/settings").json.catalogUrl
+    $r = Call POST "/api/settings" '{"catalogUrl":"https://evil.example/catalog.json"}' $null $evil
+    Check ($r.status -eq 403 -and (Call GET "/api/settings").json.catalogUrl -eq $before) "settings change from a foreign web page refused, unchanged"
+    Check ((Call POST "/api/quit" "" $null $evil).status -eq 403) "quit from a foreign web page refused"
+    Check ((Call POST "/api/open-community" "" $null $evil).status -eq 403) "open folder from a foreign web page refused"
+    Check ((Call GET "/api/ping" $null $null $evil).status -eq 200) "EFB endpoint ping open to any origin"
+    $r = Call POST "/api/aircraft/aero-at3/state" '{"oil":3}' $null "coui://html_ui"; Check ($r.status -eq 200) "EFB state sync from the sim origin allowed"
+    Check (@(400, 403) -contains (Call GET "/api/status" $null $null $null "evil.example:$port").status) "DNS rebinding (foreign Host header) refused (Windows HTTP layer: 400, hangar check: 403)"
+    Check ((Call POST "/api/settings" '{"checkHours":24}' $null "http://localhost:$port").status -eq 200) "the hangar page itself may change settings"
     Section "catalogue and release selection"
     $cat = (Call GET "/api/catalog?refresh=1").json
     $A = $cat | ? id -eq "a"; $B = $cat | ? id -eq "b"; $D = $cat | ? id -eq "d"; $E = $cat | ? id -eq "e"
@@ -249,6 +264,52 @@ try {
     Check ($err -and $st.selfUpdate.message -match "checksum") "corrupt update rejected ($($st.selfUpdate.message))"
     Check ((Call GET "/api/ping").json.version -eq "1.0.0" -and (Sha (Join-Path $runDir2 "JetstreamHangar.exe")) -eq $oldHash) "still running the original, exe untouched"
     Check (-not (Test-Path (Join-Path $runDir2 "JetstreamHangar.new.exe"))) "bad download deleted"
+    StopAll
+    Section "GitHub unreachable: keeps running"
+    StopAll
+    $s4 = $baseSettings.Clone(); $s4.catalogUrl = "http://localhost:8766/missing/catalog.json"; $s4.autoUpdate = $true; $s4.selfUpdate = $true; $s4.hangarRepo = "test/missing"
+    $p5 = StartInstance (Join-Path $runDir2 "JetstreamHangar.exe") $s4
+    Start-Sleep -Seconds 6
+    Check ((Call GET "/api/ping").status -eq 200) "still running 6 s after failing update checks"
+    $logText = Get-Content (Join-Path $data "hangar.log") -Raw -ErrorAction SilentlyContinue
+    Check ($logText -match "catalogue not available|update check failed") "the failure is written to hangar.log"
+    $c404 = Call GET "/api/catalog?refresh=1"; Check ($c404.status -eq 500 -and $c404.json.error) "catalogue error reported to the UI ($($c404.json.error))"
+    StopAll
+
+    Section "install, reinstall over a running copy, uninstall"
+    $instDir = Join-Path $T "inst"; $scDir = Join-Path $T "shortcuts"; $regName = "JetstreamHangarTest_" + [guid]::NewGuid().ToString("N").Substring(0, 6)
+    $dl = Join-Path $T "download"; New-Item -ItemType Directory -Force $dl | Out-Null; Copy-Item $exe (Join-Path $dl "JetstreamHangar.exe")
+    Utf8NoBom (Join-Path $data "settings.json") (ConvertTo-Json $s2)
+    function WithInstallEnv($block) {
+        $env:JETSTREAM_HANGAR_PORT = "$port"; $env:JETSTREAM_HANGAR_DATA = $data; $env:JETSTREAM_HANGAR_INSTALLDIR = $instDir; $env:JETSTREAM_HANGAR_SHORTCUTS = $scDir; $env:JETSTREAM_HANGAR_REGKEY = $regName
+        try { & $block } finally { Remove-Item Env:JETSTREAM_HANGAR_PORT, Env:JETSTREAM_HANGAR_DATA, Env:JETSTREAM_HANGAR_INSTALLDIR, Env:JETSTREAM_HANGAR_SHORTCUTS, Env:JETSTREAM_HANGAR_REGKEY -ErrorAction SilentlyContinue }
+    }
+    $s2b = $s2.Clone(); $s2b.selfUpdate = $false; Utf8NoBom (Join-Path $data "settings.json") (ConvertTo-Json $s2b)
+    WithInstallEnv { Start-Process (Join-Path $dl "JetstreamHangar.exe") -ArgumentList "--background" | Out-Null }
+    $up = WaitUntil { (Call GET "/api/ping").status -eq 200 } 20
+    $instExe = Join-Path $instDir "JetstreamHangar.exe"
+    Check ($up -and (Test-Path $instExe)) "downloaded exe installed itself to the program folder"
+    Check (@(Get-Process JetstreamHangar -ErrorAction SilentlyContinue | ? { $_.Path -eq $instExe }).Count -eq 1 -and @(Get-Process JetstreamHangar -ErrorAction SilentlyContinue | ? { $_.Path -like "$dl*" }).Count -eq 0) "the installed copy runs, the download copy exited"
+    Check ((Test-Path (Join-Path $scDir "Programs\Jetstream Hangar.lnk")) -and (Test-Path (Join-Path $scDir "Desktop\Jetstream Hangar.lnk"))) "Start menu and desktop shortcuts"
+    $lnkTarget = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $scDir "Programs\Jetstream Hangar.lnk")).TargetPath
+    Check ($lnkTarget -eq $instExe) "shortcut points at the installed exe"
+    $uk = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$regName" -ErrorAction SilentlyContinue
+    Check ($uk -and $uk.DisplayVersion -eq "1.0.0" -and $uk.UninstallString -match "--uninstall" -and $uk.InstallLocation -eq $instDir) "Apps & Features entry with uninstaller"
+    $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue).$regName
+    Check ($run -eq "`"$instExe`" --background") "starts with Windows (tray only)"
+    $pid1 = (Get-Process JetstreamHangar | ? { $_.Path -eq $instExe }).Id
+    WithInstallEnv { Start-Process (Join-Path $dl "JetstreamHangar.exe") -ArgumentList "--background" | Out-Null }
+    $re = WaitUntil { $p = Get-Process JetstreamHangar -ErrorAction SilentlyContinue | ? { $_.Path -eq $instExe }; $p -and $p.Id -ne $pid1 -and (Call GET "/api/ping").status -eq 200 } 25
+    Check $re "running again after the download was started once more (old copy quit, exe replaced)"
+    Check (@(Get-Process JetstreamHangar -ErrorAction SilentlyContinue | ? { $_.Path -like "$T*" }).Count -eq 1) "exactly one copy runs"
+    WithInstallEnv { Start-Process $instExe -ArgumentList "--uninstall", "--quiet" -Wait }
+    $gone = WaitUntil { -not (Test-Path $instDir) } 15
+    Check ((Call GET "/api/ping").status -ne 200) "uninstall stopped the running copy"
+    Check $gone "program folder removed"
+    Check (-not (Test-Path (Join-Path $scDir "Programs\Jetstream Hangar.lnk")) -and -not (Test-Path (Join-Path $scDir "Desktop\Jetstream Hangar.lnk"))) "shortcuts removed"
+    Check (-not (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$regName")) "Apps & Features entry removed"
+    Check (-not (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue).$regName) "autostart removed"
+    Check (Test-Path (Join-Path $data "settings.json")) "settings kept"
     StopAll}
 finally {
     try { Stop-Process -Id $proc.Id -Force } catch { }
@@ -257,6 +318,8 @@ finally {
     Start-Sleep -Milliseconds 500
     try { Stop-Process -Id $mockProc.Id -Force } catch { }
     Start-Sleep -Milliseconds 300
+    # never leave test entries in the user's registry
+    if ($regName) { Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$regName" -Recurse -ErrorAction SilentlyContinue; Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name $regName -ErrorAction SilentlyContinue }
     Remove-Item $T -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $mock -Recurse -Force -ErrorAction SilentlyContinue
 }

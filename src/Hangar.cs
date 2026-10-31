@@ -32,12 +32,33 @@ static class Hangar
     static NotifyIcon tray;
     static HttpListener listener;
 
+    // diagnostics: %APPDATA%\JetstreamHangar\hangar.log (unexpected errors, installs, updates)
+    public static void Log(string text)
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDir);
+            string f = Path.Combine(DataDir, "hangar.log");
+            if (File.Exists(f) && new FileInfo(f).Length > 1000000) File.Delete(f);
+            File.AppendAllText(f, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + AppVersion + "  " + text + Environment.NewLine);
+        }
+        catch { }
+    }
+
     [STAThread]
     static void Main(string[] args)
     {
+        // never die silently: log anything unexpected (the first release crashed when GitHub was unreachable)
+        AppDomain.CurrentDomain.UnhandledException += delegate (object s, UnhandledExceptionEventArgs e) { Log("CRASH " + e.ExceptionObject); };
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += delegate (object s, ThreadExceptionEventArgs e) { Log("UI error " + e.Exception); };
+        var argl = new List<string>(args);
+        if (argl.Contains("--uninstall")) { Installer.Uninstall(argl.Contains("--quiet")); return; }
         // started by a self-update: wait until the previous version has exited, then remove its renamed exe
         bool updated = args.Length >= 2 && args[0] == "--updated";
         if (updated) SelfUpdate.FinishAfterRestart(args[1]);
+        // started from a download (not the installed copy): install, start the installed copy, done
+        if (!updated && Installer.ShouldInstall(argl) && Installer.InstallAndLaunch(argl)) return;
         bool fresh;
         using (var mutex = new Mutex(true, "JetstreamHangar_SingleInstance_" + Port, out fresh))
         {
@@ -69,7 +90,16 @@ static class Hangar
             tray.ContextMenu = menu;
             tray.DoubleClick += delegate { OpenUi(); };
             tray.BalloonTipClicked += delegate { OpenUi(); };
+            if (Installer.IsInstalled) Installer.RefreshRegistration();
             if (updated) Notify(AppName, "Updated to version " + AppVersion);
+            // first start: tell where the app lives (Windows 11 hides new tray icons behind the ^ arrow)
+            string marker = Path.Combine(DataDir, "firstrun.done");
+            if (!File.Exists(marker))
+            {
+                Notify(AppName, "Jetstream Hangar runs in the tray (taskbar, hidden icons ^). It starts with Windows and keeps your aircraft up to date.");
+                try { File.WriteAllText(marker, AppVersion); } catch { }
+            }
+            Log("started" + (Installer.IsInstalled ? " (installed)" : " (portable)") + (updated ? " after self-update" : ""));
             if (args.Length == 0) OpenUi();
             else if (Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_DATA") != null) tray.Visible = false;   // test instance: no tray icon
             Application.Run();
@@ -98,18 +128,23 @@ static class Hangar
         Thread.Sleep(Settings.GetInt("startDelayMs", 3000));
         while (true)
         {
-            if (Settings.GetBool("selfUpdate") && SelfUpdate.CheckAndApply()) return;   // the new version takes over
-            CheckUpdates(false);
-            if (Settings.GetBool("autoUpdate"))
+            // one failing check (offline, GitHub down, bad catalogue) must never stop the app: log and try again later
+            try
             {
-                Library.AutoInstall();
-                // aircraft waiting for MSFS to close: poll the sim instead of sleeping for hours
-                while (Library.Waiting.Count > 0)
+                if (Settings.GetBool("selfUpdate") && SelfUpdate.CheckAndApply()) return;   // the new version takes over
+                CheckUpdates(false);
+                if (Settings.GetBool("autoUpdate"))
                 {
-                    Thread.Sleep(1000 * Math.Max(1, Settings.GetInt("simPollSeconds", 60)));
-                    if (!Community.SimRunning()) Library.AutoInstall();
+                    Library.AutoInstall();
+                    // aircraft waiting for MSFS to close: poll the sim instead of sleeping for hours
+                    while (Library.Waiting.Count > 0)
+                    {
+                        Thread.Sleep(1000 * Math.Max(1, Settings.GetInt("simPollSeconds", 60)));
+                        if (!Community.SimRunning()) Library.AutoInstall();
+                    }
                 }
             }
+            catch (Exception e) { Log("update check failed: " + e.Message); }
             Thread.Sleep(TimeSpan.FromHours(Math.Max(1, Settings.GetInt("checkHours", 6))));
         }
     }
@@ -275,16 +310,19 @@ static class Community
 static class Autostart
 {
     const string Key = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    // value name per installation (tests use their own name so the real entry is never touched)
+    static string Name { get { return Installer.RegName == "JetstreamHangar" ? Hangar.AppName : Installer.RegName; } }
     public static bool Enabled
     {
-        get { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(Key)) return k != null && k.GetValue(Hangar.AppName) != null; }
-        set
+        get { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(Key)) return k != null && k.GetValue(Name) != null; }
+        set { Set(value, Assembly.GetExecutingAssembly().Location); }
+    }
+    public static void Set(bool on, string exe)
+    {
+        using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(Key))
         {
-            using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(Key))
-            {
-                if (value) k.SetValue(Hangar.AppName, "\"" + Assembly.GetExecutingAssembly().Location + "\" --background");
-                else k.DeleteValue(Hangar.AppName, false);
-            }
+            if (on) k.SetValue(Name, "\"" + exe + "\" --background");
+            else k.DeleteValue(Name, false);
         }
     }
 }
@@ -442,7 +480,9 @@ static class Library
     public static readonly List<string> Waiting = new List<string>();   // aircraft whose update waits for MSFS to close
     public static void AutoInstall()
     {
-        var upd = List(false).Where(a => (bool)a["installed"] && (bool)a["updateAvailable"]).ToList();
+        List<Dictionary<string, object>> list;
+        try { list = List(false); } catch (Exception e) { Hangar.Log("auto-update: catalogue not available: " + e.Message); lock (gate) Waiting.Clear(); return; }
+        var upd = list.Where(a => (bool)a["installed"] && (bool)a["updateAvailable"]).ToList();
         lock (gate) Waiting.Clear();
         foreach (var a in upd)
         {
@@ -585,9 +625,31 @@ static class Api
     static string Body(HttpListenerRequest req) { using (var sr = new StreamReader(req.InputStream, Encoding.UTF8)) return sr.ReadToEnd(); }
     static Dictionary<string, object> JsonBody(HttpListenerRequest req) { var b = Body(req); return b.Length > 0 ? Hangar.Json.Deserialize<Dictionary<string, object>>(b) : new Dictionary<string, object>(); }
 
+    // EFB endpoints may be called from the sim (any origin); everything else only from the hangar page itself.
+    // Without this, any web page could change the catalogue or start installs through the browser.
+    static readonly string[] OpenPaths = { "/api/ping", "/api/navigraph/", "/api/aircraft/" };
+    static bool Allowed(string path, HttpListenerRequest req)
+    {
+        // DNS rebinding: the Host header must be this machine
+        string host = (req.Headers["Host"] ?? "").ToLowerInvariant();
+        if (host != "localhost:" + Hangar.Port && host != "127.0.0.1:" + Hangar.Port) return false;
+        if (OpenPaths.Any(p => path == p || (p.EndsWith("/") && path.StartsWith(p)))) return true;
+        string origin = req.Headers["Origin"];
+        if (string.IsNullOrEmpty(origin)) return req.HttpMethod == "GET" || req.Headers["X-Hangar"] == "1";   // scripts / tests send X-Hangar
+        return origin == "http://localhost:" + Hangar.Port || origin == "http://127.0.0.1:" + Hangar.Port;
+    }
+
     public static void Route(string path, HttpListenerRequest req, HttpListenerResponse res)
     {
         string m = req.HttpMethod;
+        if (!Allowed(path, req)) { Send(res, 403, new Dictionary<string, object> { { "error", "forbidden" } }); return; }
+        if (path == "/api/quit" && m == "POST")
+        {
+            // used by the installer and the uninstaller to stop a running copy
+            Send(res, 200, new Dictionary<string, object>());
+            ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(200); Hangar.Log("quit requested"); Hangar.Quit(); });
+            return;
+        }
         if (path == "/api/ping") { Send(res, 200, new Dictionary<string, object> { { "app", Hangar.AppName }, { "version", Hangar.AppVersion }, { "navigraph", Settings.Secret("navigraphClientId").Length > 0 } }); return; }
         if (path == "/api/status")
         {
@@ -613,7 +675,7 @@ static class Api
             }
             Send(res, 200, Settings.Public()); return;
         }
-        if (path == "/api/open-community") { if (Community.Path_.Length > 0) Process.Start("explorer.exe", "\"" + Community.Path_ + "\""); Send(res, 200, new Dictionary<string, object>()); return; }
+        if (path == "/api/open-community" && m == "POST") { if (Community.Path_.Length > 0) Process.Start("explorer.exe", "\"" + Community.Path_ + "\""); Send(res, 200, new Dictionary<string, object>()); return; }
         // EFB technical state: /api/aircraft/<id>/state
         var sm = Regex.Match(path, "^/api/aircraft/([A-Za-z0-9_-]+)/state$");
         if (sm.Success)
@@ -693,5 +755,143 @@ static class SelfUpdate
             try { var p = Process.GetProcessById(pid); p.WaitForExit(20000); } catch { }
         string old = Assembly.GetExecutingAssembly().Location + ".old";
         for (int i = 0; i < 20 && File.Exists(old); i++) { try { File.Delete(old); } catch { Thread.Sleep(250); } }
+    }
+}
+
+// ---------------- install to %LOCALAPPDATA%\Programs\JetstreamHangar, shortcuts, Apps & Features, uninstall ----------------
+// Running the downloaded exe installs it: copy to the program folder, Start menu + desktop shortcuts, an entry in
+// Apps & Features (with uninstaller), start with Windows, then the installed copy is started. Self-updates replace
+// the installed exe in place. Environment overrides (tests): JETSTREAM_HANGAR_INSTALLDIR, _SHORTCUTS, _REGKEY.
+static class Installer
+{
+    public static string Dir { get { return Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_INSTALLDIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\JetstreamHangar"); } }
+    public static string RegName { get { return Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_REGKEY") ?? "JetstreamHangar"; } }
+    public static string InstalledExe { get { return Path.Combine(Dir, "JetstreamHangar.exe"); } }
+    static string Self { get { return Assembly.GetExecutingAssembly().Location; } }
+    const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\";
+
+    static string ShortcutPath(bool desktop)
+    {
+        var o = Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_SHORTCUTS");
+        string dir = o != null ? Path.Combine(o, desktop ? "Desktop" : "Programs") : Environment.GetFolderPath(desktop ? Environment.SpecialFolder.DesktopDirectory : Environment.SpecialFolder.Programs);
+        return Path.Combine(dir, Hangar.AppName + ".lnk");
+    }
+
+    public static bool IsInstalled { get { return string.Equals(Path.GetFullPath(Self), Path.GetFullPath(InstalledExe), StringComparison.OrdinalIgnoreCase); } }
+
+    public static bool ShouldInstall(List<string> args)
+    {
+        if (IsInstalled || args.Contains("--portable")) return false;
+        if (File.Exists(Path.Combine(Path.GetDirectoryName(Self), "portable.txt"))) return false;          // developer builds (dist\)
+        // automated tests only install when they give their own install folder
+        if (Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_DATA") != null && Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_INSTALLDIR") == null) return false;
+        return true;
+    }
+
+    // true when the installed copy was started (this process ends); false: keep running from here
+    public static bool InstallAndLaunch(List<string> args)
+    {
+        try
+        {
+            bool first = !File.Exists(InstalledExe);
+            AskRunningToQuit();
+            Directory.CreateDirectory(Dir);
+            // the previous copy may hold its exe for a moment after quitting
+            for (int i = 0; ; i++)
+            {
+                try { File.Copy(Self, InstalledExe, true); break; }
+                catch (IOException) { if (i >= 20) throw; Thread.Sleep(250); }
+            }
+            var cat = Path.Combine(Path.GetDirectoryName(Self), "catalog.json");
+            if (File.Exists(cat)) File.Copy(cat, Path.Combine(Dir, "catalog.json"), true);
+            Shortcut(ShortcutPath(false)); Shortcut(ShortcutPath(true));
+            Register();
+            if (first) Autostart.Set(true, InstalledExe);          // later installs keep the user's choice
+            Hangar.Log("installed to " + Dir + (first ? " (first install)" : " (reinstall / upgrade)"));
+            Process.Start(new ProcessStartInfo(InstalledExe, args.Contains("--background") ? "--background" : "") { UseShellExecute = false });
+            return true;
+        }
+        catch (Exception e)
+        {
+            Hangar.Log("install failed: " + e);
+            if (Environment.GetEnvironmentVariable("JETSTREAM_HANGAR_DATA") == null)
+                MessageBox.Show("Jetstream Hangar could not be installed:\n" + e.Message + "\n\nIt will run from its current folder instead.", Hangar.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+    }
+
+    // a running copy (any version) is asked to quit, so its exe can be replaced or removed
+    static void AskRunningToQuit()
+    {
+        try
+        {
+            var r = (HttpWebRequest)WebRequest.Create("http://localhost:" + Hangar.Port + "/api/quit");
+            r.Method = "POST"; r.Timeout = 2000; r.Headers["X-Hangar"] = "1"; r.ContentLength = 0;
+            using (r.GetResponse()) { }
+        }
+        catch { return; }   // nothing running
+        for (int i = 0; i < 40; i++)
+        {
+            try { var p = (HttpWebRequest)WebRequest.Create("http://localhost:" + Hangar.Port + "/api/ping"); p.Timeout = 500; using (p.GetResponse()) { } Thread.Sleep(200); }
+            catch { break; }
+        }
+        Thread.Sleep(300);
+    }
+
+    // .lnk through the Windows Script Host (late bound: no extra references needed)
+    static void Shortcut(string lnk)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(lnk));
+        var t = Type.GetTypeFromProgID("WScript.Shell");
+        object shell = Activator.CreateInstance(t);
+        object sc = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+        var st = sc.GetType();
+        st.InvokeMember("TargetPath", BindingFlags.SetProperty, null, sc, new object[] { InstalledExe });
+        st.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, sc, new object[] { Dir });
+        st.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { InstalledExe + ",0" });
+        st.InvokeMember("Description", BindingFlags.SetProperty, null, sc, new object[] { "Install and update your MSFS aircraft" });
+        st.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
+    }
+
+    static void Register()
+    {
+        using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(UninstallKey + RegName))
+        {
+            k.SetValue("DisplayName", RegName == "JetstreamHangar" ? Hangar.AppName : RegName);
+            k.SetValue("DisplayVersion", Hangar.AppVersion);
+            k.SetValue("Publisher", "Jetstream Virtual");
+            k.SetValue("DisplayIcon", InstalledExe + ",0");
+            k.SetValue("InstallLocation", Dir);
+            k.SetValue("URLInfoAbout", "https://github.com/joosthv/The-Hangar");
+            k.SetValue("UninstallString", "\"" + InstalledExe + "\" --uninstall");
+            k.SetValue("QuietUninstallString", "\"" + InstalledExe + "\" --uninstall --quiet");
+            k.SetValue("NoModify", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            k.SetValue("NoRepair", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            k.SetValue("EstimatedSize", (int)(new FileInfo(InstalledExe).Length / 1024), Microsoft.Win32.RegistryValueKind.DWord);
+        }
+    }
+
+    // keep the version shown in Apps & Features right after self-updates
+    public static void RefreshRegistration()
+    {
+        try
+        {
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(UninstallKey + RegName, true))
+                if (k != null) k.SetValue("DisplayVersion", Hangar.AppVersion);
+        }
+        catch { }
+    }
+
+    public static void Uninstall(bool quiet)
+    {
+        if (!quiet && MessageBox.Show("Remove Jetstream Hangar from this computer?\n\nInstalled aircraft stay in the Community folder; settings stay in %APPDATA%\\JetstreamHangar.", Hangar.AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        AskRunningToQuit();
+        try { Autostart.Set(false, InstalledExe); } catch { }
+        foreach (var lnk in new[] { ShortcutPath(false), ShortcutPath(true) }) try { if (File.Exists(lnk)) File.Delete(lnk); } catch { }
+        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(UninstallKey + RegName, false); } catch { }
+        Hangar.Log("uninstalled from " + Dir);
+        // this exe may be the installed one: a short-lived hidden cmd removes the folder after we have exited
+        Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"" + Dir + "\"") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+        if (!quiet) MessageBox.Show("Jetstream Hangar has been removed.", Hangar.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 }

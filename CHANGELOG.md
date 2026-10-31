@@ -4,10 +4,27 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+
+## [1.0.1] - 2026-10-31
+### Fixed
+- Crash a few seconds after start when GitHub or the catalogue could not be reached (the tray icon never appeared).
+  Update checks now catch every error, log it and try again later.
+
+### Added
+- Installs itself on first start: program folder `%LOCALAPPDATA%\Programs\JetstreamHangar`, Start menu and desktop
+  shortcuts, Apps & Features entry with uninstaller, start with Windows (tray). Running a newer download upgrades the
+  installed copy.
+- App icon, and a notice on first start that the hangar lives in the tray.
+- `%APPDATA%\JetstreamHangar\hangar.log` with starts, installs, updates and errors.
+
 ### Changed
 - This repository is public and also carries the aircraft releases (`at3-v*`), so no GitHub token is needed;
   aircraft source code stays in private repositories.
 
+### Security
+- Management calls (install, uninstall, settings, quit) are only accepted from the hangar's own page or local
+  scripts, so other web pages cannot drive the hangar; the EFB endpoints stay open. Requests with a foreign Host
+  header are refused (DNS rebinding).
 ## [1.0.0] - 2026-10-31
 First release.
 

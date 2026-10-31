@@ -146,7 +146,7 @@ $("#settingsForm").onsubmit = async (e) => {
     $("#saved").textContent = "Saved."; setTimeout(() => $("#saved").textContent = "", 2500);
     loadStatus(); loadLibrary(true);
 };
-$("#openCommunity").onclick = () => api("open-community");
+$("#openCommunity").onclick = () => post("open-community");
 $("#refresh").onclick = () => loadLibrary(true);
 
 (async () => {

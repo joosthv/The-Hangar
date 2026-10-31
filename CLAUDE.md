@@ -20,6 +20,10 @@ powershell -File tests\run_tests.ps1                        # end-to-end, writes
 $env:GITHUB_TOKEN = (gh auth token); powershell -File release.ps1 -Version x.y.z   # needs a CHANGELOG.md section
 ```
 
+## Release / update process
+Follow `docs/RELEASING.md` step by step for every release (checklist, exact commands, verification, what to do
+when a release is bad). Never publish without the user's go-ahead.
+
 ## Definition of done
 Build succeeds, `tests\run_tests.ps1` reports 0 failed, `CHANGELOG.md` updated under `[Unreleased]`, README updated if
 the user-facing behaviour changed. Releasing (`hangar-vx.y.z`) makes every running hangar update itself - ask first.

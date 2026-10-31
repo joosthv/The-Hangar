@@ -20,7 +20,7 @@ if (-not $Notes) { $Notes = ChangelogNotes (Join-Path $here "CHANGELOG.md") $Ver
 if (-not $Notes) { throw "CHANGELOG.md has no section for $Version - add it before releasing" }
 
 Set-Content (Join-Path $here "VERSION") -Value $Version -Encoding ASCII
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here "build.ps1") -Version $Version -OutDir $out
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here "build.ps1") -Version $Version -OutDir $out -Release
 $exe = Join-Path $out "JetstreamHangar.exe"
 $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText("$exe.sha256", "$sha  JetstreamHangar.exe`n")

@@ -53,6 +53,18 @@ Release `hangar-v<version>` with `JetstreamHangar.exe` (+ `.sha256`). Download t
 rename the running exe to `.exe.old` (Windows allows renaming a running exe), move the new one in, start it with
 `--updated <pid>`, exit. The new process waits for the old pid, deletes `.old`, notifies.
 
+### Install / uninstall (`Installer`)
+Started from anywhere but `%LOCALAPPDATA%\Programs\JetstreamHangar\` (and without `portable.txt` / `--portable`):
+ask a running copy to quit (`POST /api/quit`), copy the exe (+ catalog.json), Start menu + desktop shortcut
+(WScript.Shell, late bound), Apps & Features key `HKCU\...\Uninstall\JetstreamHangar` (UninstallString
+`--uninstall`), autostart on first install, start the installed copy. `--uninstall [--quiet]` reverses it and
+removes the folder through a short-lived hidden cmd. Test overrides: `JETSTREAM_HANGAR_INSTALLDIR`, `_SHORTCUTS`,
+`_REGKEY` (also used for the autostart value name).
+
+### Robustness
+Unhandled exceptions are logged (`hangar.log`); the update loop catches every error per iteration (1.0.0 crashed
+when the catalogue was unreachable).
+
 ## 3. HTTP API
 | Method | Path | |
 | --- | --- | --- |
@@ -65,7 +77,10 @@ rename the running exe to `.exe.old` (Windows allows renaming a running exe), mo
 | GET | `/api/open-community` | opens Explorer |
 | GET/POST | `/api/aircraft/<id>/state` | EFB technical state |
 | POST | `/api/navigraph/deviceauthorization`, `/api/navigraph/token` | form-encoded; client id/secret added here; refresh grants go to `/connect/token/` |
-All `/api/*` responses allow cross-origin calls (the EFB runs in the sim's browser).
+All `/api/*` responses allow cross-origin calls (the EFB runs in the sim's browser), but only `/api/ping`,
+`/api/navigraph/*` and `/api/aircraft/*` accept any origin. Everything else requires the hangar page's own origin
+(`http://localhost:48330`) or, for scripts without an Origin, GET or the header `X-Hangar: 1`. The Host header must
+be localhost (DNS rebinding); Windows' HTTP layer already answers foreign hosts with 400.
 
 ## 4. Tests (`tests/run_tests.ps1`)
 Builds fake packages and a mock Releases API (draft, pre-release, other tags, broken zip, bad checksum, no release,

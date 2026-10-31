@@ -4,6 +4,12 @@ Installs, updates and removes aircraft in the Microsoft Flight Simulator 2024 Co
 backend for the aircraft EFBs (Navigraph sign-in, technical state). A tray app with a web interface on
 `http://localhost:48330`.
 
+## Install
+Download `JetstreamHangar.exe` from the [latest release](https://github.com/joosthv/The-Hangar/releases/latest)
+(the newest `hangar-v*` release) and run it. It installs itself (no administrator rights): Start menu and desktop
+shortcut, Apps & Features entry, start with Windows. It then lives in the tray (Windows 11: hidden icons ^) and keeps
+itself and your aircraft up to date. Remove it through Apps & Features.
+
 ## Aircraft catalogue
 `catalog.json` in this repository lists the aircraft. Each entry points at the GitHub repository whose releases carry
 the package - normally this public repository (aircraft source code lives in private repositories, only the release
