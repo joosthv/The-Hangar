@@ -4,6 +4,8 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+
+## [1.0.2] - 2026-10-31
 ### Added
 - **Navigraph account in the hangar**: sign in once on the Library page (link, QR code and user code); the sign-in
   is kept encrypted (Windows DPAPI) and the aircraft EFBs get their chart tokens from the hangar - no sign-in in the
