@@ -77,8 +77,12 @@ sign-in stops. authorization_pending / slow_down (+5 s) / access_denied / expire
 token request always carries `scope`. Refresh token stored DPAPI-encrypted in `navigraph.dat` and rotated on every
 refresh; `GET /api/navigraph/access` returns a valid access token (refreshing when needed) to the sim only.
 `navigraphIdentity` setting = identity base URL (tests point it at the mock server).
-Client credentials: `secrets.json` first, else `navigraph-client.dat` (DPAPI) entered on the Library page
-(`POST /api/navigraph/credentials {clientId, clientSecret}`, page origin only; empty values remove it). Note for
+Client credentials, first found wins: `secrets.json`, `navigraph-client.dat` (DPAPI; API only,
+`POST /api/navigraph/credentials {clientId, clientSecret}`, page origin only; no UI), and the app's own client
+compiled into release builds (`build.ps1 -Release` reads `%APPDATA%\JetstreamHangar\secrets.json`, or
+`-NavigraphClient <json>`; XOR-masked constants in `HangarBuild`, refuses to build a release without it). Users
+only see "Sign in" (QR / link / code). The client secret is never in the repository; anyone can extract it from the
+exe, which is normal for a desktop app (the user's own sign-in protects the account). Note for
 Claude: files written from the sandboxed shell under `%APPDATA%` may not be visible to the real hangar process
 (that is why 1.0.1/1.0.2 said "not configured"); check from a normal process (a .bat started through explorer.exe).
 

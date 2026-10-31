@@ -435,6 +435,24 @@ Section "API security (browser pages cannot drive the hangar)"
     $r = Call POST "/api/navigraph/credentials" '{"clientId":"","clientSecret":""}' $null $page; Check ($r.json.configured -eq $false -and -not (Test-Path $cdat)) "empty credentials remove them"
     StopAll
 
+    Section "Navigraph client built into release builds (users only sign in)"
+    $embDir = Join-Path $T "embedded"; $embCfg = Join-Path $T "ngclient.json"
+    Utf8NoBom $embCfg '{ "navigraphClientId": "embedded-id", "navigraphClientSecret": "embedded-secret-4711" }'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $hangarRoot "build.ps1") -OutDir $embDir -NavigraphClient $embCfg | Out-Null
+    $embExe = Join-Path $embDir "JetstreamHangar.exe"
+    $bytes = [IO.File]::ReadAllBytes($embExe)
+    Check (-not ([Text.Encoding]::ASCII.GetString($bytes) -match "embedded-secret-4711") -and -not ([Text.Encoding]::Unicode.GetString($bytes) -match "embedded-secret-4711")) "the client secret is not stored as plain text in the exe"
+    Utf8NoBom (Join-Path $data "secrets.json") '{}'; Remove-Item $cdat -ErrorAction SilentlyContinue
+    $p10d = StartInstance $embExe $sn
+    Check ((Call GET "/api/navigraph/session").json.configured -eq $true -and (Call GET "/api/ping").json.navigraph -eq $true) "configured without any file on this computer"
+    Remove-Item (Join-Path $mock "identity.log"), (Join-Path $mock "tokencount") -ErrorAction SilentlyContinue
+    Call POST "/api/navigraph/login" "" $null $page | Out-Null
+    $inE = WaitUntil { (Call GET "/api/navigraph/session").json.state -eq "in" } 15
+    $dev = Get-Content (Join-Path $mock "identity.log") -ErrorAction SilentlyContinue | ? { $_ -like "identity/connect/deviceauthorization*" } | Select-Object -First 1
+    Check ($inE -and $dev -match "client_id=embedded-id" -and $dev -match "client_secret=embedded-secret-4711") "sign-in (code / QR) works with the built-in client"
+    Call POST "/api/navigraph/logout" "" $null $page | Out-Null
+    StopAll
+
     Section "release list re-read when it is old"
     $sr = $baseSettings.Clone(); $sr.autoUpdate = $false; $sr.selfUpdate = $false; $sr.releaseCacheSeconds = 3
     $p10c = StartInstance $exe3 $sr

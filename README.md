@@ -40,7 +40,7 @@ Refused while MSFS runs. Uninstall only removes folders that contain a `manifest
 | Endpoint | Use |
 | --- | --- |
 | `GET /api/ping` | EFB detects the hangar |
-| `POST /api/navigraph/deviceauthorization`, `/api/navigraph/token` | Navigraph device flow; the hangar adds the client credentials from `%APPDATA%\JetstreamHangar\secrets.json` |
+| `POST /api/navigraph/deviceauthorization`, `/api/navigraph/token` | Navigraph device flow; the hangar adds its own Navigraph client (built into release builds); users only sign in with the QR code / link |
 | `GET/POST /api/aircraft/<id>/state` | technical state synced by the EFB, shown on the aircraft card |
 
 ## Build and test

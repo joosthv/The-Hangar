@@ -22,14 +22,14 @@ async function loadStatus() {
     try { j = (await api("status")).j; } catch (e) { $("#chips").innerHTML = `<span class="chip warn">Hangar not answering - restarting?</span>`; return; }
     $("#ver").textContent = "v" + j.version;
     const chips = [];
-    chips.push(j.communityOk ? ["ok", "Community folder found"] : ["bad", "Community folder not found"]);
+    chips.push(j.communityOk ? ["ok", "Community folder"] : ["bad", "Community folder not found"]);
     chips.push(j.simRunning ? ["warn", "MSFS running"] : ["ok", "MSFS closed"]);
-    chips.push(j.navigraph ? ["ok", "EFB backend ready"] : ["warn", "Navigraph not configured"]);
-    if (j.waiting && j.waiting.length) chips.push(["warn", "Update waiting for MSFS to close: " + j.waiting.join(", ")]);
+    chips.push(j.navigraph ? ["ok", "EFB backend ready"] : ["warn", "Navigraph unavailable"]);
+    if (j.waiting && j.waiting.length) chips.push(["warn", "Waiting for MSFS to close: " + j.waiting.join(", ")]);
     else if (j.autoUpdate) chips.push(["ok", "Auto-update on"]);
     const su = j.selfUpdate || {};
-    if (su.state === "current") chips.push(["ok", "Hangar " + j.version + " - up to date"]);
-    else if (su.state === "available") chips.push(["warn link", "Hangar " + su.latest + " available - click to update", "selfupdate"]);
+    if (su.state === "current") chips.push(["ok", "Hangar up to date"]);
+    else if (su.state === "available") chips.push(["warn link", "Hangar " + su.latest + " available - update", "selfupdate"]);
     else if (su.state === "updating") chips.push(["warn", "Updating hangar to " + su.latest + " - restarting"]);
     else if (su.state === "error") chips.push(["bad", su.message]);
     else chips.push(["", "Hangar " + j.version]);
@@ -75,10 +75,28 @@ function techHtml(st) {
         ["Battery", Math.round(st.battery) + " %", lvl(st.battery, 60, 25, true)],
     ];
     const seen = st._seen ? new Date(st._seen).toLocaleString() : "";
-    return `<h3>Technical state ${seen ? `<span class="muted" style="text-transform:none;font-weight:400">- synced ${esc(seen)}</span>` : ""}</h3>
-        <div class="aw ${issues.length ? "bad" : "ok"}">${issues.length ? "NOT AIRWORTHY: " + esc(issues.join(", ")) : "AIRWORTHY"}</div>
+    return `<div class="tech-head"><div><div class="eyebrow">Technical state</div>${seen ? `<div class="muted small">Synced from the EFB ${esc(seen)}</div>` : ""}</div>
+        <div class="aw ${issues.length ? "bad" : "ok"}">${issues.length ? "Not airworthy: " + esc(issues.join(", ")) : "Airworthy"}</div></div>
         <div class="grid">${rows.map(r => `<div><span>${esc(r[0])}</span><span class="${r[2]}">${esc(r[1])}</span></div>`).join("")}</div>
         <div class="log">${(st.log || []).slice(0, 12).map(e => esc(e.t + "  " + e.h + " h  " + e.text)).join("<br>")}</div>`;
+}
+
+// release notes are a CHANGELOG.md section: "### Heading", "- item" (continued on indented lines), **bold**
+function notesHtml(md) {
+    const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+    let html = "", list = null;
+    const flush = () => { if (list) { html += "<ul>" + list.map(li => `<li>${inline(li)}</li>`).join("") + "</ul>"; list = null; } };
+    for (const raw of String(md).replace(/\r/g, "").split("\n")) {
+        const line = raw.trimEnd();
+        if (!line.trim()) { flush(); continue; }
+        let m;
+        if ((m = line.match(/^#{2,4}\s+(.*)/))) { flush(); html += `<h4>${inline(m[1])}</h4>`; }
+        else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { (list = list || []).push(m[1]); }
+        else if (list && /^\s+/.test(raw)) { list[list.length - 1] += " " + line.trim(); }
+        else { flush(); html += `<p>${inline(line)}</p>`; }
+    }
+    flush();
+    return html;
 }
 
 function render() {
@@ -86,14 +104,18 @@ function render() {
     for (const a of items) {
         const el = $("#cardTpl").content.firstElementChild.cloneNode(true);
         el.dataset.id = a.id;
-        const th = $(".thumb", el);
-        if (a.image) th.style.backgroundImage = `url("${a.image}")`; else th.textContent = "✈";
+        // the whole picture is shown (contain), never cropped
+        const th = $(".thumb", el), img = $("img", th);
+        if (a.image) { img.src = a.image; img.alt = a.name; img.onerror = () => { img.remove(); th.classList.add("empty"); }; }
+        else { img.remove(); th.classList.add("empty"); }
         $("h2", el).textContent = a.name;
         $(".maker", el).textContent = a.manufacturer || "";
         $(".desc", el).textContent = a.description || "";
-        const badge = !a.installed ? `<span class="badge none">not installed</span>` : a.updateAvailable ? `<span class="badge upd">update available</span>` : a.latestVersion ? `<span class="badge ok">up to date</span>` : "";
-        $(".versions", el).innerHTML = `${badge}<span>Installed <b>${esc(a.installedVersion || "-")}</b></span><span>Latest <b>${esc(a.latestVersion || "-")}</b></span>` +
-            (a.release && a.release.size ? `<span>${(a.release.size / 1048576).toFixed(0)} MB</span>` : "") + (a.releaseError ? `<span style="color:var(--warn)">${esc(a.releaseError)}</span>` : "");
+        $(".state", el).innerHTML = !a.installed ? `<span class="badge none">Not installed</span>` : a.updateAvailable ? `<span class="badge upd">Update available</span>` : a.latestVersion ? `<span class="badge ok">Up to date</span>` : "";
+        const cell = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
+        $(".versions", el).innerHTML = cell("Installed", a.installedVersion || "-") + cell("Latest", a.latestVersion || "-") +
+            cell("Download", a.release && a.release.size ? (a.release.size / 1048576).toFixed(0) + " MB" : "-") +
+            (a.releaseError ? `<div class="err">${esc(a.releaseError)}</div>` : "");
         const b = $(".buttons", el), busy = job.state === "running";
         const btn = (label, cls, fn, dis) => { const x = document.createElement("button"); x.textContent = label; if (cls) x.className = cls; x.disabled = !!dis || busy; x.onclick = fn; b.appendChild(x); };
         if (a.release) {
@@ -102,7 +124,7 @@ function render() {
             else btn("Reinstall", "secondary", () => install(a));
         }
         if (a.installed) btn("Uninstall", "danger", () => uninstall(a));
-        if (a.release && a.release.notes) { $(".notes", el).classList.remove("hidden"); $(".notes pre", el).textContent = a.release.notes; }
+        if (a.release && a.release.notes) { $(".notes", el).classList.remove("hidden"); $(".notes .md", el).innerHTML = notesHtml(a.release.notes); }
         if (a.state) { const t = $(".tech", el); t.classList.remove("hidden"); t.innerHTML = techHtml(a.state); }
         if (job.id === a.id && job.state !== "idle") showJob(el);
         host.appendChild(el);
@@ -178,6 +200,19 @@ async function loadScan(refresh) {
     sel.innerHTML = `<option value="ALL">All packages (${total})</option>` + types.map(t => `<option value="${esc(t)}">${esc(typeNames[t] || t)} (${scan.counts[t]})</option>`).join("");
     sel.value = types.indexOf(cur) >= 0 || cur === "ALL" ? cur : (types.indexOf("AIRPORT") >= 0 ? "AIRPORT" : "ALL");
     renderScan();
+    loadAirportNames();
+}
+// airport names next to the ICAO codes (package titles are often only a code or a copyright line)
+let aptNames = {}, aptTimer = null;
+async function loadAirportNames() {
+    const icaos = [...new Set((scan.packages || []).flatMap(p => p.airports || []))].filter(i => !aptNames[i]);
+    if (!icaos.length) return;
+    try {
+        const { j } = await api("airports?icao=" + encodeURIComponent(icaos.join(",")));
+        clearTimeout(aptTimer);
+        if (j.status === "ready") { Object.keys(j.airports).forEach(k => aptNames[k] = j.airports[k].name); renderScan(); }
+        else if (j.status === "loading" || j.status === "not loaded") aptTimer = setTimeout(loadAirportNames, 2000);
+    } catch (e) { }
 }
 function scanRows() {
     const q = $("#scanSearch").value.trim().toLowerCase(), type = $("#scanType").value;
@@ -211,7 +246,7 @@ async function renderMap(rows) {
     for (const p of rows) for (const icao of p.airports || []) {
         const a = j.airports[icao]; if (!a) { missing.push(icao); continue; }
         pts.push([a.lat, a.lon]);
-        L.circleMarker([a.lat, a.lon], { radius: 7, weight: 2, color: p.airportsGuessed ? "#d29922" : "#2f81f7", fillColor: p.airportsGuessed ? "#d29922" : "#2f81f7", fillOpacity: .55, dashArray: p.airportsGuessed ? "3 3" : null })
+        L.circleMarker([a.lat, a.lon], { radius: 6, weight: 1.5, color: p.airportsGuessed ? "#e2a74f" : "#8fb4d6", fillColor: p.airportsGuessed ? "#e2a74f" : "#8fb4d6", fillOpacity: .35, dashArray: p.airportsGuessed ? "3 3" : null })
             .bindTooltip(icao, { permanent: pts.length <= 40, direction: "top", offset: [0, -6], className: "icaotip" })
             .bindPopup(`<b>${esc(icao)}</b> ${esc(a.name)}<br>${esc(p.title)}${p.creator ? "<br><span class='muted'>" + esc(p.creator) + "</span>" : ""}${p.airportsGuessed ? "<br><i>ICAO guessed from the folder name</i>" : ""}`)
             .addTo(mapLayer);
@@ -236,7 +271,7 @@ function renderScan() {
         <div class="t">${esc(p.title)}</div>
         <div class="side"><button class="secondary" data-open="${esc(p.folder)}">Open folder</button></div>
         <div class="meta">
-          ${(p.airports || []).slice(0, 12).map(i => `<span class="icao${p.airportsGuessed ? " guess" : ""}" title="${p.airportsGuessed ? "guessed from the folder name" : "from ContentHistory.json"}">${esc(i)}</span>`).join("")}
+          ${(p.airports || []).slice(0, 12).map(i => `<span class="icao${p.airportsGuessed ? " guess" : ""}" title="${p.airportsGuessed ? "guessed from the folder name" : "from ContentHistory.json"}">${esc(i)}</span>${(p.airports || []).length <= 3 && aptNames[i] ? `<span class="aname">${esc(aptNames[i])}</span>` : ""}`).join("")}
           ${(p.airports || []).length > 12 ? `<span class="tag" title="${esc(p.airports.slice(12).join(", "))}">+${p.airports.length - 12} more airports</span>` : ""}
           ${p.creator ? `<span>${esc(p.creator)}</span>` : ""}
           ${p.version ? `<span>v${esc(p.version)}</span>` : ""}
@@ -259,8 +294,7 @@ async function ngRefresh() {
     let s;
     try { s = (await api("navigraph/session")).j; } catch (e) { return; }
     const st = $("#ngState"), waiting = s.state === "waiting" || s.state === "starting";
-    $("#ngSetup").classList.toggle("hidden", !!s.configured);
-    st.textContent = !s.configured ? "Set up the Navigraph API client to sign in" : s.state === "in" ? "Signed in" + (s.user ? " as " + s.user : "") :
+    st.textContent = !s.configured ? "Not available in this build" : s.state === "in" ? "Signed in" + (s.user ? " as " + s.user : "") :
         waiting ? "Waiting for your approval" : s.state === "error" ? s.message : "Not signed in" + (s.message ? " - " + s.message : "");
     st.style.color = s.state === "in" ? "var(--ok)" : s.state === "error" ? "var(--bad)" : "";
     $("#ngLogin").classList.toggle("hidden", s.state === "in" || waiting || !s.configured);
@@ -284,12 +318,6 @@ async function ngRefresh() {
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ngRefresh(); });
 $("#ngLogin").onclick = async () => { ngLastCode = ""; const { ok, j } = await post("navigraph/login"); if (!ok) notice("Navigraph: " + (j.error || "sign-in could not start"), true); ngRefresh(); };
-$("#ngSetup").onsubmit = async (ev) => {
-    ev.preventDefault();
-    const f = ev.target, { ok, j } = await post("navigraph/credentials", { clientId: f.clientId.value, clientSecret: f.clientSecret.value });
-    $("#ngSetupMsg").textContent = ok ? "" : j.error || "Could not store the credentials";
-    if (ok) { f.reset(); await loadStatus(); ngRefresh(); }
-};
 $("#ngCancel").onclick = async () => { await post("navigraph/cancel"); ngRefresh(); };
 $("#ngLogout").onclick = async () => { if (confirm("Sign out of Navigraph? The EFBs lose access to charts until you sign in again.")) { await post("navigraph/logout"); ngRefresh(); } };
 

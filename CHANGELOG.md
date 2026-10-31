@@ -4,6 +4,16 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+### Changed
+- **New look** in the Jetstream Virtual style: sidebar with the compass rose and a system-status panel (annunciator
+  lights), IBM Plex type, slate colours, version / download figures as a data strip, release notes formatted from the
+  changelog, a calmer technical-state table, grouped settings. Works in narrow windows too.
+- Scenery shows the airport name next to each ICAO code.
+- **Navigraph: just sign in.** The hangar brings its own Navigraph API client, so the Library page only offers
+  "Sign in" with a QR code, a link and the code to confirm - no client ID or secret to enter.
+
+### Fixed
+- The aircraft picture was cropped on the card; it is now shown whole.
 
 ## [1.0.3] - 2026-10-31
 ### Added

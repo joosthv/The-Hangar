@@ -278,8 +278,17 @@ static class Settings
             object v; if (secrets.TryGetValue(k, out v) && v != null && Convert.ToString(v).Length > 0) return Convert.ToString(v);
             // otherwise the Navigraph client entered on the hangar page (navigraph-client.dat, DPAPI)
             if (client == null) client = ReadClient() ?? new Dictionary<string, object>();
-            return client.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : "";
+            if (client.TryGetValue(k, out v) && v != null && Convert.ToString(v).Length > 0) return Convert.ToString(v);
+            // finally the app's own client compiled into release builds (build.ps1), so users only sign in
+            return BuiltIn(k == "navigraphClientId" ? HangarBuild.NgId : k == "navigraphClientSecret" ? HangarBuild.NgSecret : "");
         }
+    }
+    static string BuiltIn(string masked)
+    {
+        if (string.IsNullOrEmpty(masked) || string.IsNullOrEmpty(HangarBuild.NgKey)) return "";
+        var key = Convert.FromBase64String(HangarBuild.NgKey); var b = Convert.FromBase64String(masked);
+        for (int i = 0; i < b.Length; i++) b[i] ^= key[i % key.Length];
+        return Encoding.UTF8.GetString(b);
     }
     static Dictionary<string, object> client;
     static string Client_ { get { return Path.Combine(Hangar.DataDir, "navigraph-client.dat"); } }

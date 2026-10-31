@@ -27,7 +27,8 @@ Developer builds (`dist\`, with `portable.txt`) run in place and never install t
    powershell -File release.ps1 -Version x.y.z
    Remove-Item Env:GITHUB_TOKEN
    ```
-   Writes `VERSION`, builds with `-Release` (no portable marker) into `dist\release`, writes the `.sha256`, takes the
+   Writes `VERSION`, builds with `-Release` (no portable marker, Navigraph client compiled in from
+   `%APPDATA%\JetstreamHangar\secrets.json` - the build stops if that file is missing) into `dist\release`, writes the `.sha256`, takes the
    notes from `CHANGELOG.md` and creates release `hangar-vx.y.z` with both files. Commit the changed `VERSION`.
 6. Verify: `gh release view hangar-vx.y.z --repo joosthv/The-Hangar`; a running older hangar updates within its
    next check (tray > "Check for updates" or restart) - `%APPDATA%\JetstreamHangar\hangar.log` shows
