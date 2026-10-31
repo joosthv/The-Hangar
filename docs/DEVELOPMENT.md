@@ -65,6 +65,24 @@ removes the folder through a short-lived hidden cmd. Test overrides: `JETSTREAM_
 Unhandled exceptions are logged (`hangar.log`); the update loop catches every error per iteration (1.0.0 crashed
 when the catalogue was unreachable).
 
+### Navigraph account (`NavigraphAuth`)
+Device-authorization flow with PKCE run by the hangar (`POST /api/navigraph/login`). Polling only while a client
+watches: every `GET /api/navigraph/session` is a heartbeat; without one for `navigraphHeartbeatSeconds` (20) the
+sign-in stops. authorization_pending / slow_down (+5 s) / access_denied / expired_token (new code) as in the docs; the
+token request always carries `scope`. Refresh token stored DPAPI-encrypted in `navigraph.dat` and rotated on every
+refresh; `GET /api/navigraph/access` returns a valid access token (refreshing when needed) to the sim only.
+`navigraphIdentity` setting = identity base URL (tests point it at the mock server).
+
+### Community overview (`CommunityScan`)
+`GET /api/community[?refresh=1]`: every package folder (skips `.hangar_*`), manifest fields, airports from
+`ContentHistory.json` items of type Airport (root or `ContentInfo\**`), otherwise a guess from the folder name
+(first part = developer, skipped), linked folders (reparse points) flagged. Cached 60 s.
+
+### Update checks
+`Hangar.CheckEverything`: self-update first (applied when `selfUpdate` is on or the user pressed "update"),
+then the aircraft. `POST /api/check-updates` (page button, tray item), `POST /api/self-update` (force).
+`SelfUpdate.Status`: state idle/current/available/updating/error, current, latest, checked.
+
 ## 3. HTTP API
 | Method | Path | |
 | --- | --- | --- |
@@ -74,7 +92,13 @@ when the catalogue was unreachable).
 | GET | `/api/job` | install progress |
 | POST | `/api/install`, `/api/uninstall` | `{ "id": "..." }` |
 | GET/POST | `/api/settings` | see table above |
-| GET | `/api/open-community` | opens Explorer |
+| POST | `/api/open-community` | opens Explorer |
+| GET | `/api/community[?refresh=1]` | Community folder overview |
+| POST | `/api/open-package` | `{ "folder": "..." }` opens a package folder (must be inside Community) |
+| POST | `/api/check-updates`, `/api/self-update` | update checks (see above) |
+| GET | `/api/navigraph/session` | sign-in state (+ code while waiting); also the heartbeat |
+| POST | `/api/navigraph/login`, `/cancel`, `/logout` | sim or hangar page only |
+| GET | `/api/navigraph/access` | access token, sim or hangar page only |
 | GET/POST | `/api/aircraft/<id>/state` | EFB technical state |
 | POST | `/api/navigraph/deviceauthorization`, `/api/navigraph/token` | form-encoded; client id/secret added here; refresh grants go to `/connect/token/` |
 All `/api/*` responses allow cross-origin calls (the EFB runs in the sim's browser), but only `/api/ping`,

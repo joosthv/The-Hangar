@@ -9,6 +9,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
     document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== t.dataset.view));
     if (t.dataset.view === "settings") loadSettings();
+    if (t.dataset.view === "scenery" && !scan) loadScan(false);
 });
 
 function notice(text, err) {
@@ -17,16 +18,25 @@ function notice(text, err) {
 }
 
 async function loadStatus() {
-    const { j } = await api("status");
+    let j;
+    try { j = (await api("status")).j; } catch (e) { $("#chips").innerHTML = `<span class="chip warn">Hangar not answering - restarting?</span>`; return; }
+    $("#ver").textContent = "v" + j.version;
     const chips = [];
     chips.push(j.communityOk ? ["ok", "Community folder found"] : ["bad", "Community folder not found"]);
     chips.push(j.simRunning ? ["warn", "MSFS running"] : ["ok", "MSFS closed"]);
     chips.push(j.navigraph ? ["ok", "EFB backend ready"] : ["warn", "Navigraph not configured"]);
     if (j.waiting && j.waiting.length) chips.push(["warn", "Update waiting for MSFS to close: " + j.waiting.join(", ")]);
     else if (j.autoUpdate) chips.push(["ok", "Auto-update on"]);
-    if (j.selfUpdate && j.selfUpdate.state === "error") chips.push(["bad", j.selfUpdate.message]);
-    $(".brand").title = "Version " + j.version;
-    $("#chips").innerHTML = chips.map(c => `<span class="chip ${c[0]}">${esc(c[1])}</span>`).join("");
+    const su = j.selfUpdate || {};
+    if (su.state === "current") chips.push(["ok", "Hangar " + j.version + " - up to date"]);
+    else if (su.state === "available") chips.push(["warn link", "Hangar " + su.latest + " available - click to update", "selfupdate"]);
+    else if (su.state === "updating") chips.push(["warn", "Updating hangar to " + su.latest + " - restarting"]);
+    else if (su.state === "error") chips.push(["bad", su.message]);
+    else chips.push(["", "Hangar " + j.version]);
+    $(".brand").title = "Version " + j.version + (su.checked ? " - checked " + su.checked : "");
+    $("#chips").innerHTML = chips.map(c => `<span class="chip ${c[0]}"${c[2] ? ` data-act="${c[2]}"` : ""}>${esc(c[1])}</span>`).join("");
+    const act = document.querySelector("[data-act=selfupdate]");
+    if (act) act.onclick = async () => { await post("self-update"); notice("Updating Jetstream Hangar - it restarts in a few seconds."); setTimeout(loadStatus, 4000); };
     if (!j.catalogUrl) notice("No catalogue URL set - using the local catalog.json. Set the GitHub catalogue under Settings.");
     return j;
 }
@@ -147,11 +157,89 @@ $("#settingsForm").onsubmit = async (e) => {
     loadStatus(); loadLibrary(true);
 };
 $("#openCommunity").onclick = () => post("open-community");
-$("#refresh").onclick = () => loadLibrary(true);
+// "Check for updates": the hangar itself first (it may restart), then the aircraft
+$("#refresh").onclick = async () => {
+    $("#refresh").disabled = true;
+    await post("check-updates");
+    setTimeout(async () => { await loadStatus(); await loadLibrary(true); }, 2500);
+};
+// ---------------- Community folder overview (scenery and every other package) ----------------
+let scan = null;
+const typeNames = { SCENERY: "Scenery", AIRCRAFT: "Aircraft", LIVERY: "Liveries", MISC: "Misc / libraries", INSTRUMENTS: "Instruments", CORE: "Core", UNKNOWN: "Unknown / broken" };
+async function loadScan(refresh) {
+    $("#scanCount").textContent = "Scanning...";
+    try { scan = (await api("community" + (refresh ? "?refresh=1" : ""))).j; } catch (e) { $("#scanCount").textContent = "Scan failed: " + e; return; }
+    const sel = $("#scanType"), cur = sel.value || "SCENERY";
+    const types = Object.keys(scan.counts || {}).sort();
+    const total = (scan.packages || []).length;
+    sel.innerHTML = `<option value="ALL">All packages (${total})</option>` + types.map(t => `<option value="${esc(t)}">${esc(typeNames[t] || t)} (${scan.counts[t]})</option>`).join("");
+    sel.value = types.indexOf(cur) >= 0 || cur === "ALL" ? cur : (types.indexOf("SCENERY") >= 0 ? "SCENERY" : "ALL");
+    renderScan();
+}
+function renderScan() {
+    if (!scan) return;
+    const q = $("#scanSearch").value.trim().toLowerCase(), type = $("#scanType").value;
+    const rows = (scan.packages || []).filter(p => (type === "ALL" || p.type === type) &&
+        (!q || [p.title, p.creator, p.folder].concat(p.airports || []).some(v => String(v || "").toLowerCase().indexOf(q) >= 0)));
+    $("#scanCount").textContent = rows.length + " shown - " + (scan.community || "no Community folder") + " - scanned " + scan.scanned;
+    $("#scanList").innerHTML = rows.map(p => `<div class="pkg">
+        <div class="t">${esc(p.title)}</div>
+        <div class="side"><button class="secondary" data-open="${esc(p.folder)}">Open folder</button></div>
+        <div class="meta">
+          ${(p.airports || []).slice(0, 12).map(i => `<span class="icao${p.airportsGuessed ? " guess" : ""}" title="${p.airportsGuessed ? "guessed from the folder name" : "from ContentHistory.json"}">${esc(i)}</span>`).join("")}
+          ${(p.airports || []).length > 12 ? `<span class="tag" title="${esc(p.airports.slice(12).join(", "))}">+${p.airports.length - 12} more airports</span>` : ""}
+          ${p.creator ? `<span>${esc(p.creator)}</span>` : ""}
+          ${p.version ? `<span>v${esc(p.version)}</span>` : ""}
+          ${p.sizeMB ? `<span>${p.sizeMB >= 1024 ? (p.sizeMB / 1024).toFixed(1) + " GB" : Math.round(p.sizeMB) + " MB"}</span>` : ""}
+          <span class="tag">${esc(typeNames[p.type] || p.type)}</span>
+          ${p.linked ? `<span class="tag" title="folder is a link to another location">linked</span>` : ""}
+          ${p.problem ? `<span class="tag warn">${esc(p.problem)}</span>` : ""}
+          <span class="muted">${esc(p.folder)}</span>
+        </div></div>`).join("") || `<p class="muted">Nothing matches.</p>`;
+    document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => post("open-package", { folder: b.dataset.open }));
+}
+$("#scanSearch").oninput = renderScan;
+$("#scanType").onchange = renderScan;
+$("#scanRefresh").onclick = () => loadScan(true);
+// ---------------- Navigraph account (held by the hangar) ----------------
+// While a sign-in is waiting, the page asks for the session every 2 s; that is the hangar's sign that someone is
+// watching. Leaving or hiding the page stops it, and the hangar ends the sign-in after about 20 s (device-flow rule).
+let ngTimer = null, ngLastCode = "";
+async function ngRefresh() {
+    let s;
+    try { s = (await api("navigraph/session")).j; } catch (e) { return; }
+    const st = $("#ngState"), waiting = s.state === "waiting" || s.state === "starting";
+    st.textContent = !s.configured ? "Not available in this installation" : s.state === "in" ? "Signed in" + (s.user ? " as " + s.user : "") :
+        waiting ? "Waiting for your approval" : s.state === "error" ? s.message : "Not signed in" + (s.message ? " - " + s.message : "");
+    st.style.color = s.state === "in" ? "var(--ok)" : s.state === "error" ? "var(--bad)" : "";
+    $("#ngLogin").classList.toggle("hidden", s.state === "in" || waiting || !s.configured);
+    $("#ngLogout").classList.toggle("hidden", s.state !== "in");
+    $("#ngCancel").classList.toggle("hidden", !waiting);
+    $("#ngCode").classList.toggle("hidden", !(s.state === "waiting" && s.code));
+    if (s.state === "waiting" && s.code) {
+        const c = s.code;
+        if (c.verification_uri_complete !== ngLastCode) {
+            ngLastCode = c.verification_uri_complete;
+            const cv = $("#ngQr"), g = cv.getContext("2d");
+            QR.draw(g, c.verification_uri_complete, 0, 0, cv.width);
+        }
+        $("#ngLink").textContent = c.verification_uri.replace(/^https?:\/\//, "");
+        $("#ngLink").href = c.verification_uri_complete;
+        $("#ngUserCode").textContent = c.user_code;
+        $("#ngExpires").textContent = "Code valid for " + Math.floor(c.expires_in / 60) + ":" + String(c.expires_in % 60).padStart(2, "0");
+    }
+    clearTimeout(ngTimer);
+    if (waiting && document.visibilityState === "visible") ngTimer = setTimeout(ngRefresh, 2000);
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ngRefresh(); });
+$("#ngLogin").onclick = async () => { ngLastCode = ""; const { ok, j } = await post("navigraph/login"); if (!ok) notice("Navigraph: " + (j.error || "sign-in could not start"), true); ngRefresh(); };
+$("#ngCancel").onclick = async () => { await post("navigraph/cancel"); ngRefresh(); };
+$("#ngLogout").onclick = async () => { if (confirm("Sign out of Navigraph? The EFBs lose access to charts until you sign in again.")) { await post("navigraph/logout"); ngRefresh(); } };
 
 (async () => {
     await loadStatus();
     job = (await api("job")).j;
     await loadLibrary(false);
+    ngRefresh();
     setInterval(loadStatus, 10000);
 })();

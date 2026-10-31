@@ -84,7 +84,8 @@ static class Hangar
             tray = new NotifyIcon { Icon = AppIcon(), Text = AppName, Visible = true };
             var menu = new ContextMenu();
             menu.MenuItems.Add("Open " + AppName, delegate { OpenUi(); });
-            menu.MenuItems.Add("Check for updates", delegate { ThreadPool.QueueUserWorkItem(delegate { CheckUpdates(true); }); });
+            menu.MenuItems.Add("Jetstream Hangar " + AppVersion) .Enabled = false;
+            menu.MenuItems.Add("Check for updates", delegate { ThreadPool.QueueUserWorkItem(delegate { CheckEverything(false); }); });
             menu.MenuItems.Add("-");
             menu.MenuItems.Add("Quit", delegate { tray.Visible = false; Application.Exit(); });
             tray.ContextMenu = menu;
@@ -131,7 +132,7 @@ static class Hangar
             // one failing check (offline, GitHub down, bad catalogue) must never stop the app: log and try again later
             try
             {
-                if (Settings.GetBool("selfUpdate") && SelfUpdate.CheckAndApply()) return;   // the new version takes over
+                if (SelfUpdate.CheckAndApply(Settings.GetBool("selfUpdate"))) return;   // the new version takes over (off: only reported)
                 CheckUpdates(false);
                 if (Settings.GetBool("autoUpdate"))
                 {
@@ -147,6 +148,16 @@ static class Hangar
             catch (Exception e) { Log("update check failed: " + e.Message); }
             Thread.Sleep(TimeSpan.FromHours(Math.Max(1, Settings.GetInt("checkHours", 6))));
         }
+    }
+    public static void CheckEverything(bool forceSelf)
+    {
+        try
+        {
+            if (SelfUpdate.CheckAndApply(Settings.GetBool("selfUpdate") || forceSelf)) return;   // restarting with the new version
+            CheckUpdates(true);
+            if (Settings.GetBool("autoUpdate")) Library.AutoInstall();
+        }
+        catch (Exception e) { Log("check for updates failed: " + e.Message); }
     }
     public static void Quit() { try { if (tray != null) tray.Visible = false; } catch { } try { listener.Stop(); } catch { } Environment.Exit(0); }
     static void CheckUpdates(bool manual)
@@ -239,6 +250,7 @@ static class Settings
             if (!s.ContainsKey("autoUpdate")) s["autoUpdate"] = true;     // install new aircraft releases automatically
             if (!s.ContainsKey("selfUpdate")) s["selfUpdate"] = true;     // keep Jetstream Hangar itself up to date
             if (!s.ContainsKey("hangarRepo")) s["hangarRepo"] = "joosthv/The-Hangar";
+            if (!s.ContainsKey("navigraphIdentity")) s["navigraphIdentity"] = "https://identity.api.navigraph.com";   // test hook: mock identity server
         }
     }
     public static Dictionary<string, object> ReadJson(string f)
@@ -250,7 +262,19 @@ static class Settings
     public static int GetInt(string k, int def) { int i; return int.TryParse(Get(k), out i) ? i : def; }
     public static bool GetBool(string k) { return Get(k).ToLowerInvariant() == "true"; }
     public static void Set(string k, object v) { lock (gate) s[k] = v; }
-    public static string Secret(string k) { lock (gate) { object v; return secrets.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : ""; } }
+    public static string Secret(string k)
+    {
+        lock (gate)
+        {
+            // never trust a single read at start-up: if the credentials are missing, look again (1.0.1 missed them once)
+            if (secrets.Count == 0)
+            {
+                secrets = ReadJson(Secrets_) ?? ReadJson(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "secrets.json")) ?? new Dictionary<string, object>();
+                if (secrets.Count > 0) Hangar.Log("Navigraph credentials loaded on demand");
+            }
+            object v; return secrets.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : "";
+        }
+    }
     public static Dictionary<string, object> Public()
     {
         lock (gate)
@@ -627,7 +651,9 @@ static class Api
 
     // EFB endpoints may be called from the sim (any origin); everything else only from the hangar page itself.
     // Without this, any web page could change the catalogue or start installs through the browser.
-    static readonly string[] OpenPaths = { "/api/ping", "/api/navigraph/", "/api/aircraft/" };
+    static readonly string[] OpenPaths = { "/api/ping", "/api/aircraft/", "/api/navigraph/session", "/api/navigraph/deviceauthorization", "/api/navigraph/token" };
+    // Navigraph account: the sim (coui:// or no Origin) and the hangar page only - a web page must never get a token
+    static readonly string[] SimOrPagePaths = { "/api/navigraph/access", "/api/navigraph/login", "/api/navigraph/cancel", "/api/navigraph/logout" };
     static bool Allowed(string path, HttpListenerRequest req)
     {
         // DNS rebinding: the Host header must be this machine
@@ -635,6 +661,12 @@ static class Api
         if (host != "localhost:" + Hangar.Port && host != "127.0.0.1:" + Hangar.Port) return false;
         if (OpenPaths.Any(p => path == p || (p.EndsWith("/") && path.StartsWith(p)))) return true;
         string origin = req.Headers["Origin"];
+        if (SimOrPagePaths.Contains(path))
+        {
+            bool ok = string.IsNullOrEmpty(origin) || origin.StartsWith("coui://", StringComparison.OrdinalIgnoreCase) || origin == "http://localhost:" + Hangar.Port || origin == "http://127.0.0.1:" + Hangar.Port;
+            if (!ok) Hangar.Log("refused " + path + " from origin " + origin);
+            return ok;
+        }
         if (string.IsNullOrEmpty(origin)) return req.HttpMethod == "GET" || req.Headers["X-Hangar"] == "1";   // scripts / tests send X-Hangar
         return origin == "http://localhost:" + Hangar.Port || origin == "http://127.0.0.1:" + Hangar.Port;
     }
@@ -650,7 +682,7 @@ static class Api
             ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(200); Hangar.Log("quit requested"); Hangar.Quit(); });
             return;
         }
-        if (path == "/api/ping") { Send(res, 200, new Dictionary<string, object> { { "app", Hangar.AppName }, { "version", Hangar.AppVersion }, { "navigraph", Settings.Secret("navigraphClientId").Length > 0 } }); return; }
+        if (path == "/api/ping") { Send(res, 200, new Dictionary<string, object> { { "app", Hangar.AppName }, { "version", Hangar.AppVersion }, { "navigraph", Settings.Secret("navigraphClientId").Length > 0 }, { "navigraphAuth", true } }); return; }
         if (path == "/api/status")
         {
             Send(res, 200, new Dictionary<string, object> {
@@ -659,6 +691,10 @@ static class Api
                 { "autoUpdate", Settings.GetBool("autoUpdate") }, { "waiting", Library.Waiting.ToArray() }, { "selfUpdate", SelfUpdate.Status } });
             return;
         }
+        if (path == "/api/check-updates" && m == "POST") { ThreadPool.QueueUserWorkItem(delegate { Hangar.CheckEverything(false); }); Send(res, 202, new Dictionary<string, object>()); return; }
+        if (path == "/api/self-update" && m == "POST") { ThreadPool.QueueUserWorkItem(delegate { Hangar.CheckEverything(true); }); Send(res, 202, new Dictionary<string, object>()); return; }
+        if (path == "/api/community") { Send(res, 200, CommunityScan.Scan(req.QueryString["refresh"] == "1")); return; }
+        if (path == "/api/open-package" && m == "POST") { var e = CommunityScan.OpenFolder(Convert.ToString(JsonBody(req)["folder"])); Send(res, e == null ? 200 : 400, new Dictionary<string, object> { { "error", e } }); return; }
         if (path == "/api/catalog") { Send(res, 200, Library.List(req.QueryString["refresh"] == "1")); return; }
         if (path == "/api/job") { Send(res, 200, Library.Job); return; }
         if (path == "/api/install" && m == "POST") { var e = Library.StartInstall(Convert.ToString(JsonBody(req)["id"])); Send(res, e == null ? 202 : 409, new Dictionary<string, object> { { "error", e } }); return; }
@@ -682,6 +718,18 @@ static class Api
         {
             if (m == "POST") { try { Sync.Put(sm.Groups[1].Value, Body(req)); Send(res, 200, new Dictionary<string, object>()); } catch { Send(res, 400, new Dictionary<string, object> { { "error", "invalid JSON" } }); } }
             else { var st = Sync.Get(sm.Groups[1].Value); Send(res, st == null ? 404 : 200, st ?? (object)new Dictionary<string, object>()); }
+            return;
+        }
+        // Navigraph account kept by the hangar (sign in once on the desktop; the EFBs ask for tokens)
+        if (path == "/api/navigraph/session") { NavigraphAuth.Heartbeat(); Send(res, 200, NavigraphAuth.Session()); return; }
+        if (path == "/api/navigraph/login" && m == "POST") { var e = NavigraphAuth.Start(); Send(res, e == null ? 202 : 503, e == null ? NavigraphAuth.Session() : new Dictionary<string, object> { { "error", e } }); return; }
+        if (path == "/api/navigraph/cancel" && m == "POST") { NavigraphAuth.Cancel("cancelled"); Send(res, 200, NavigraphAuth.Session()); return; }
+        if (path == "/api/navigraph/logout" && m == "POST") { NavigraphAuth.Logout(); Send(res, 200, NavigraphAuth.Session()); return; }
+        if (path == "/api/navigraph/access")
+        {
+            string err; var t = NavigraphAuth.AccessToken(out err);
+            if (t == null) Send(res, 401, new Dictionary<string, object> { { "error", err } });
+            else Send(res, 200, new Dictionary<string, object> { { "access_token", t }, { "expires_in", NavigraphAuth.ExpiresIn() }, { "user", NavigraphAuth.User } });
             return;
         }
         // Navigraph device flow: forward with the client credentials kept on this computer
@@ -712,11 +760,13 @@ static class Api
 // ---------------- self-update from the hangar's own GitHub releases (tag hangar-v<version>, asset JetstreamHangar.exe) ----------------
 static class SelfUpdate
 {
-    public static Dictionary<string, object> Status = new Dictionary<string, object> { { "state", "idle" } };
-    static void Set(string state, string msg) { Status = new Dictionary<string, object> { { "state", state }, { "message", msg }, { "current", Hangar.AppVersion } }; }
+    public static Dictionary<string, object> Status = new Dictionary<string, object> { { "state", "idle" }, { "message", "Not checked yet" }, { "current", Hangar.AppVersion }, { "latest", Hangar.AppVersion } };
+    static void Set(string state, string msg) { Set(state, msg, null); }
+    static void Set(string state, string msg, string latest) { Status = new Dictionary<string, object> { { "state", state }, { "message", msg }, { "current", Hangar.AppVersion }, { "latest", latest ?? Hangar.AppVersion }, { "checked", DateTime.Now.ToString("HH:mm") } }; }
 
     // true when a new version was installed and started (the caller must stop)
-    public static bool CheckAndApply()
+    public static bool CheckAndApply() { return CheckAndApply(true); }
+    public static bool CheckAndApply(bool apply)
     {
         string exe = Assembly.GetExecutingAssembly().Location, dir = Path.GetDirectoryName(exe);
         try
@@ -725,7 +775,8 @@ static class SelfUpdate
             if (rel == null) { Set("current", "No hangar release published"); return false; }
             var latest = Library.ParseVersion(Convert.ToString(rel["version"])); var mine = Library.ParseVersion(Hangar.AppVersion);
             if (latest == null || mine == null || latest <= mine) { Set("current", "Up to date (" + Hangar.AppVersion + ")"); return false; }
-            Set("updating", "Downloading " + rel["version"]);
+            if (!apply) { Set("available", "Version " + rel["version"] + " is available", Convert.ToString(rel["version"])); return false; }
+            Set("updating", "Installing version " + rel["version"] + " - the hangar restarts", Convert.ToString(rel["version"]));
             string tmp = Path.Combine(dir, "JetstreamHangar.new.exe"), old = exe + ".old";
             using (var resp = GitHub.OpenAsset(rel, "url", "apiUrl")) using (var src = resp.GetResponseStream()) using (var dst = File.Create(tmp)) src.CopyTo(dst);
             if (rel["sha256Url"] != null)
@@ -893,5 +944,310 @@ static class Installer
         // this exe may be the installed one: a short-lived hidden cmd removes the folder after we have exited
         Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"" + Dir + "\"") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
         if (!quiet) MessageBox.Show("Jetstream Hangar has been removed.", Hangar.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+}
+
+// ---------------- Navigraph account held by the hangar ----------------
+// The user signs in once (hangar page or an EFB starts it); the hangar runs the device-authorization flow with PKCE,
+// keeps the refresh token encrypted with DPAPI (current user) in navigraph.dat and hands out access tokens to the sims.
+// Device-flow rules: polling only while a client watches (a session request at least every heartbeatSeconds, 20 s),
+// authorization_pending = keep polling, slow_down = interval + 5 s, access_denied = stop, expired_token = new code.
+static class NavigraphAuth
+{
+    const string Scope = "openid fmsdata charts:index:read offline_access";
+    static readonly object gate = new object();
+    static string state = "out", message = "", userCode, verifyUri, verifyUriComplete, deviceCode, verifier, access, refreshToken;
+    static DateTime codeExpires, accessExpires, lastHeartbeat;
+    static int intervalMs = 5000, run;
+    public static string User = "";
+    static bool loaded;
+    static string Base { get { return Settings.Get("navigraphIdentity").TrimEnd('/'); } }
+    static string Store_ { get { return Path.Combine(Hangar.DataDir, "navigraph.dat"); } }
+
+    static void Load()
+    {
+        if (loaded) return; loaded = true;
+        try
+        {
+            if (!File.Exists(Store_)) return;
+            var plain = ProtectedData.Unprotect(File.ReadAllBytes(Store_), null, DataProtectionScope.CurrentUser);
+            var d = Hangar.Json.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(plain));
+            refreshToken = Convert.ToString(d["refresh_token"]); User = d.ContainsKey("user") ? Convert.ToString(d["user"]) : "";
+            if (refreshToken.Length > 0) state = "in";
+        }
+        catch (Exception e) { Hangar.Log("navigraph: stored sign-in unreadable: " + e.Message); }
+    }
+    static void Save()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(refreshToken)) { if (File.Exists(Store_)) File.Delete(Store_); return; }
+            var json = Hangar.Json.Serialize(new Dictionary<string, object> { { "refresh_token", refreshToken }, { "user", User } });
+            File.WriteAllBytes(Store_, ProtectedData.Protect(Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser));
+        }
+        catch (Exception e) { Hangar.Log("navigraph: could not store the sign-in: " + e.Message); }
+    }
+
+    public static void Heartbeat() { lock (gate) lastHeartbeat = DateTime.UtcNow; }
+
+    public static Dictionary<string, object> Session()
+    {
+        lock (gate)
+        {
+            Load();
+            var d = new Dictionary<string, object> { { "state", state }, { "user", User }, { "message", message }, { "configured", Settings.Secret("navigraphClientId").Length > 0 } };
+            if (state == "waiting")
+                d["code"] = new Dictionary<string, object> { { "user_code", userCode }, { "verification_uri", verifyUri }, { "verification_uri_complete", verifyUriComplete }, { "expires_in", Math.Max(0, (int)(codeExpires - DateTime.UtcNow).TotalSeconds) } };
+            return d;
+        }
+    }
+
+    static string B64Url(byte[] b) { return Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_'); }
+
+    // POST a form to the identity server with the client credentials; returns status and JSON
+    static int Post(string path, Dictionary<string, string> form, out Dictionary<string, object> json)
+    {
+        form["client_id"] = Settings.Secret("navigraphClientId"); form["client_secret"] = Settings.Secret("navigraphClientSecret");
+        var body = string.Join("&", form.Select(kv => Uri.EscapeDataString(kv.Key) + "=" + Uri.EscapeDataString(kv.Value)).ToArray());
+        var r = (HttpWebRequest)WebRequest.Create(Base + path);
+        r.Method = "POST"; r.ContentType = "application/x-www-form-urlencoded"; r.UserAgent = Hangar.AppName + "/" + Hangar.AppVersion; r.Timeout = 20000;
+        var bytes = Encoding.UTF8.GetBytes(body); using (var s = r.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+        HttpWebResponse resp;
+        try { resp = (HttpWebResponse)r.GetResponse(); } catch (WebException we) { resp = we.Response as HttpWebResponse; if (resp == null) throw; }
+        using (resp) using (var sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+        {
+            var text = sr.ReadToEnd();
+            try { json = Hangar.Json.Deserialize<Dictionary<string, object>>(text); } catch { json = new Dictionary<string, object>(); }
+            return (int)resp.StatusCode;
+        }
+    }
+    static string S(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : ""; }
+
+    // user initiated: request a device code and start polling in the background
+    public static string Start()
+    {
+        if (Settings.Secret("navigraphClientId").Length == 0) return "navigraph_not_configured";
+        int my;
+        lock (gate) { Load(); my = ++run; state = "starting"; message = "Requesting a sign-in code"; lastHeartbeat = DateTime.UtcNow; }
+        try
+        {
+            var vb = new byte[32]; using (var rng = new RNGCryptoServiceProvider()) rng.GetBytes(vb);
+            string ver = B64Url(vb), challenge; using (var sha = SHA256.Create()) challenge = B64Url(sha.ComputeHash(Encoding.ASCII.GetBytes(ver)));
+            Dictionary<string, object> j;
+            int st = Post("/connect/deviceauthorization", new Dictionary<string, string> { { "code_challenge", challenge }, { "code_challenge_method", "S256" }, { "scope", Scope } }, out j);
+            lock (gate)
+            {
+                if (my != run) return null;
+                if (st != 200 || S(j, "device_code").Length == 0) { state = "error"; message = "Navigraph refused the sign-in request (" + (S(j, "error").Length > 0 ? S(j, "error") : "HTTP " + st) + ")"; return message; }
+                verifier = ver; deviceCode = S(j, "device_code"); userCode = S(j, "user_code"); verifyUri = S(j, "verification_uri");
+                verifyUriComplete = S(j, "verification_uri_complete").Length > 0 ? S(j, "verification_uri_complete") : verifyUri;
+                double exp, iv; double.TryParse(S(j, "expires_in"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out exp); double.TryParse(S(j, "interval"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out iv);
+                codeExpires = DateTime.UtcNow.AddSeconds(exp > 0 ? exp : 1800); intervalMs = (int)(1000 * (iv > 0 ? iv : 5));
+                state = "waiting"; message = "Waiting for approval";
+            }
+            new Thread(delegate () { Poll(my); }) { IsBackground = true }.Start();
+            return null;
+        }
+        catch (Exception e) { lock (gate) { state = "error"; message = "No connection to Navigraph (" + e.Message + ")"; } return message; }
+    }
+
+    static void Poll(int my)
+    {
+        int heartbeat = Math.Max(2, Settings.GetInt("navigraphHeartbeatSeconds", 20));
+        while (true)
+        {
+            int wait; lock (gate) wait = intervalMs;
+            Thread.Sleep(wait);
+            string dc, ver;
+            lock (gate)
+            {
+                if (my != run || state != "waiting") return;
+                // nobody is looking at the sign-in screen any more: stop polling (device-flow requirement)
+                if ((DateTime.UtcNow - lastHeartbeat).TotalSeconds > heartbeat) { state = "out"; message = "Sign-in stopped (the sign-in screen was closed)"; return; }
+                if (DateTime.UtcNow > codeExpires) { message = "Code expired - requesting a new one"; }
+                dc = deviceCode; ver = verifier;
+            }
+            if (DateTime.UtcNow > codeExpires) { Start(); return; }
+            Dictionary<string, object> j; int st;
+            try { st = Post("/connect/token", new Dictionary<string, string> { { "grant_type", "urn:ietf:params:oauth:grant-type:device_code" }, { "device_code", dc }, { "code_verifier", ver }, { "scope", Scope } }, out j); }
+            catch { continue; }   // network hiccup: keep polling
+            string err = S(j, "error");
+            lock (gate)
+            {
+                if (my != run) return;
+                if (st == 200 && S(j, "access_token").Length > 0) { Accept(j); state = "in"; message = ""; ThreadPool.QueueUserWorkItem(delegate { FetchUser(); }); Hangar.Log("navigraph: signed in"); return; }
+                if (err == "authorization_pending") continue;
+                if (err == "slow_down") { intervalMs += 5000; continue; }
+                if (err == "access_denied") { state = "error"; message = "Sign-in was denied"; return; }
+                if (err != "expired_token") { state = "error"; message = "Sign-in failed (" + (err.Length > 0 ? err : "HTTP " + st) + ")"; return; }
+            }
+            Start(); return;   // expired_token: restart with a new code
+        }
+    }
+
+    static void Accept(Dictionary<string, object> j)
+    {
+        access = S(j, "access_token");
+        double exp; double.TryParse(S(j, "expires_in"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out exp);
+        accessExpires = DateTime.UtcNow.AddSeconds((exp > 0 ? exp : 3600) - 60);
+        if (S(j, "refresh_token").Length > 0) { refreshToken = S(j, "refresh_token"); Save(); }   // single use: always keep the newest
+    }
+
+    static void FetchUser()
+    {
+        try
+        {
+            string t; lock (gate) t = access;
+            var r = (HttpWebRequest)WebRequest.Create(Base + "/connect/userinfo"); r.Headers["Authorization"] = "Bearer " + t; r.UserAgent = Hangar.AppName; r.Timeout = 15000;
+            using (var resp = r.GetResponse()) using (var sr = new StreamReader(resp.GetResponseStream()))
+            {
+                var u = Hangar.Json.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+                lock (gate) { User = S(u, "preferred_username").Length > 0 ? S(u, "preferred_username") : S(u, "name"); Save(); }
+            }
+        }
+        catch { }
+    }
+
+    public static void Cancel(string why)
+    {
+        lock (gate) { run++; if (state == "starting" || state == "waiting" || state == "error") { state = string.IsNullOrEmpty(refreshToken) ? "out" : "in"; message = why; } }
+    }
+
+    public static void Logout()
+    {
+        lock (gate) { run++; refreshToken = null; access = null; User = ""; state = "out"; message = "Signed out"; Save(); }
+        Hangar.Log("navigraph: signed out");
+    }
+
+    public static int ExpiresIn() { lock (gate) return Math.Max(0, (int)(accessExpires - DateTime.UtcNow).TotalSeconds); }
+
+    // a valid access token, refreshed when needed; null when not signed in
+    public static string AccessToken(out string error)
+    {
+        error = null;
+        string rt;
+        lock (gate)
+        {
+            Load();
+            if (!string.IsNullOrEmpty(access) && DateTime.UtcNow < accessExpires) return access;
+            rt = refreshToken;
+        }
+        if (string.IsNullOrEmpty(rt)) { error = "not_signed_in"; return null; }
+        if (Settings.Secret("navigraphClientId").Length == 0) { error = "navigraph_not_configured"; return null; }
+        try
+        {
+            Dictionary<string, object> j;
+            int st = Post("/connect/token/", new Dictionary<string, string> { { "grant_type", "refresh_token" }, { "refresh_token", rt } }, out j);
+            lock (gate)
+            {
+                if (st == 200 && S(j, "access_token").Length > 0) { Accept(j); state = "in"; if (User.Length == 0) ThreadPool.QueueUserWorkItem(delegate { FetchUser(); }); return access; }
+                if (S(j, "error") == "invalid_grant") { refreshToken = null; access = null; state = "out"; message = "Navigraph sign-in expired - sign in again"; Save(); Hangar.Log("navigraph: refresh token rejected"); }
+                error = S(j, "error").Length > 0 ? S(j, "error") : "HTTP " + st;
+                return null;
+            }
+        }
+        catch (Exception e) { error = "navigraph_unreachable: " + e.Message; return null; }
+    }
+}
+
+// ---------------- what is in the Community folder (scenery overview) ----------------
+// Reads every package folder: manifest.json (title, creator, content_type, version, size) and ContentHistory.json
+// (airports by ICAO). Linked folders (junctions / symlinks, common with add-on managers) are followed and flagged.
+static class CommunityScan
+{
+    static readonly object gate = new object();
+    static Dictionary<string, object> cache; static DateTime cacheAt;
+
+    static string S(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) && v != null ? Convert.ToString(v).Trim() : ""; }
+
+    public static Dictionary<string, object> Scan(bool refresh)
+    {
+        lock (gate)
+        {
+            if (cache != null && !refresh && DateTime.UtcNow - cacheAt < TimeSpan.FromSeconds(60)) return cache;
+            string root = Community.Path_;
+            var list = new List<Dictionary<string, object>>();
+            var counts = new Dictionary<string, object>();
+            if (root.Length > 0 && Directory.Exists(root))
+            {
+                foreach (var dir in Directory.GetDirectories(root))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (name.StartsWith(".")) continue;                       // our own temporary folders
+                    var item = new Dictionary<string, object> { { "folder", name } };
+                    try
+                    {
+                        var info = new DirectoryInfo(dir);
+                        bool linked = (info.Attributes & FileAttributes.ReparsePoint) != 0;
+                        item["linked"] = linked;
+                        var man = Settings.ReadJson(Path.Combine(dir, "manifest.json"));
+                        if (man == null) { item["type"] = "UNKNOWN"; item["title"] = name; item["problem"] = linked && !Directory.Exists(dir) ? "broken link" : "no manifest.json"; }
+                        else
+                        {
+                            item["title"] = S(man, "title").Length > 0 ? S(man, "title") : name;
+                            item["creator"] = S(man, "creator");
+                            item["type"] = S(man, "content_type").Length > 0 ? S(man, "content_type").ToUpperInvariant() : "UNKNOWN";
+                            item["version"] = S(man, "package_version");
+                            long size; if (long.TryParse(S(man, "total_package_size"), out size) && size > 0) item["sizeMB"] = Math.Round(size / 1048576.0, 1);
+                        }
+                        var airports = Airports(dir, name);
+                        item["airports"] = airports.Item1.ToArray();
+                        item["airportsGuessed"] = airports.Item2;
+                    }
+                    catch (Exception e) { item["type"] = "UNKNOWN"; item["title"] = name; item["problem"] = e.Message; }
+                    string t = Convert.ToString(item["type"]);
+                    counts[t] = (counts.ContainsKey(t) ? (int)counts[t] : 0) + 1;
+                    list.Add(item);
+                }
+            }
+            cache = new Dictionary<string, object> { { "community", root }, { "packages", list.OrderBy(i => Convert.ToString(i["title"]), StringComparer.OrdinalIgnoreCase).ToArray() }, { "counts", counts }, { "scanned", DateTime.Now.ToString("HH:mm:ss") } };
+            cacheAt = DateTime.UtcNow;
+            return cache;
+        }
+    }
+
+    // ICAO codes from ContentHistory.json (items of type Airport); otherwise a guess from the folder name
+    static Tuple<List<string>, bool> Airports(string dir, string folder)
+    {
+        var found = new List<string>();
+        var candidates = new List<string> { Path.Combine(dir, "ContentHistory.json") };
+        var ci = Path.Combine(dir, "ContentInfo");
+        if (Directory.Exists(ci)) candidates.AddRange(Directory.GetFiles(ci, "ContentHistory.json", SearchOption.AllDirectories));
+        foreach (var f in candidates)
+        {
+            var d = Settings.ReadJson(f); if (d == null) continue;
+            foreach (var it in Library.Arr(d.ContainsKey("items") ? d["items"] : null))
+                if (S(it, "type").Equals("Airport", StringComparison.OrdinalIgnoreCase))
+                {
+                    var icao = S(it, "content").ToUpperInvariant();
+                    if (Regex.IsMatch(icao, "^[A-Z0-9]{3,4}$") && !found.Contains(icao)) found.Add(icao);
+                }
+        }
+        if (found.Count > 0) return Tuple.Create(found, false);
+        // typical names: "orbx-ybbn-brisbane", "flytampa-eham-amsterdam", "aerosoft-airport-lowi"
+        // the first part is usually the developer ("orbx", "flytampa"), so it is skipped when there are more parts
+        var parts = Regex.Split(folder.ToLowerInvariant(), "[-_ .]+").Where(x => x.Length > 0).ToList();
+        for (int i = parts.Count > 1 ? 1 : 0; i < parts.Count; i++)
+        {
+            string w = parts[i].ToUpperInvariant();
+            if (Regex.IsMatch(w, "^[A-Z]{4}$") && IcaoPrefix(w) && !found.Contains(w)) found.Add(w);
+        }
+        return Tuple.Create(found, true);
+    }
+    // first letters used by ICAO airport codes; filters most ordinary words out of the folder-name guess
+    static bool IcaoPrefix(string w)
+    {
+        if (Regex.IsMatch(w, "^(PACK|MESH|LIBR|MISC|DATA|TEXT|MODS|FREE|DEMO|BASE|CORE|PATH|LITE|PLUS|FULL|PART|PROP|WORL|NAVD|AIRP|SCEN)")) return false;
+        return "ABCDEFGHKLMNOPRSTUVWYZ".IndexOf(w[0]) >= 0;
+    }
+
+    public static string OpenFolder(string folder)
+    {
+        string root = Community.Path_;
+        if (root.Length == 0) return "Community folder not found";
+        var full = Path.GetFullPath(Path.Combine(root, folder));
+        if (!full.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(full)) return "Not a package folder";
+        Process.Start("explorer.exe", "\"" + full + "\"");
+        return null;
     }
 }

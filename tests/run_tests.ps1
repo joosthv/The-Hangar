@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $hangarRoot = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $hangarRoot "dist\JetstreamHangar.exe"
+$curVer = (Get-Content (Join-Path $hangarRoot "VERSION") -Raw).Trim()   # version of the build under test
 $mock = Join-Path $PSScriptRoot "mock"
 $T = Join-Path $env:TEMP ("hangar_test_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $data = Join-Path $T "data"; $community = Join-Path $T "Community"
@@ -262,7 +263,7 @@ Section "API security (browser pages cannot drive the hangar)"
     $p4 = StartInstance (Join-Path $runDir2 "JetstreamHangar.exe") $s3
     $st = $null; $err = WaitUntil { $script:st = (Call GET "/api/status").json; $st.selfUpdate.state -eq "error" } 15
     Check ($err -and $st.selfUpdate.message -match "checksum") "corrupt update rejected ($($st.selfUpdate.message))"
-    Check ((Call GET "/api/ping").json.version -eq "1.0.0" -and (Sha (Join-Path $runDir2 "JetstreamHangar.exe")) -eq $oldHash) "still running the original, exe untouched"
+    Check ((Call GET "/api/ping").json.version -eq $curVer -and (Sha (Join-Path $runDir2 "JetstreamHangar.exe")) -eq $oldHash) "still running the original, exe untouched"
     Check (-not (Test-Path (Join-Path $runDir2 "JetstreamHangar.new.exe"))) "bad download deleted"
     StopAll
     Section "GitHub unreachable: keeps running"
@@ -294,7 +295,7 @@ Section "API security (browser pages cannot drive the hangar)"
     $lnkTarget = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $scDir "Programs\Jetstream Hangar.lnk")).TargetPath
     Check ($lnkTarget -eq $instExe) "shortcut points at the installed exe"
     $uk = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$regName" -ErrorAction SilentlyContinue
-    Check ($uk -and $uk.DisplayVersion -eq "1.0.0" -and $uk.UninstallString -match "--uninstall" -and $uk.InstallLocation -eq $instDir) "Apps & Features entry with uninstaller"
+    Check ($uk -and $uk.DisplayVersion -eq $curVer -and $uk.UninstallString -match "--uninstall" -and $uk.InstallLocation -eq $instDir) "Apps & Features entry with uninstaller"
     $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue).$regName
     Check ($run -eq "`"$instExe`" --background") "starts with Windows (tray only)"
     $pid1 = (Get-Process JetstreamHangar | ? { $_.Path -eq $instExe }).Id
@@ -310,6 +311,125 @@ Section "API security (browser pages cannot drive the hangar)"
     Check (-not (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$regName")) "Apps & Features entry removed"
     Check (-not (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue).$regName) "autostart removed"
     Check (Test-Path (Join-Path $data "settings.json")) "settings kept"
+    StopAll
+    # ================= Navigraph account held by the hangar (mock identity server) =================
+    Section "Navigraph account: sign-in, tokens, refresh rotation, storage"
+    StopAll
+    $runDir3 = Join-Path $T "run3"; New-Item -ItemType Directory -Force $runDir3 | Out-Null; Copy-Item $exe (Join-Path $runDir3 "JetstreamHangar.exe")
+    $exe3 = Join-Path $runDir3 "JetstreamHangar.exe"
+    Remove-Item (Join-Path $data "navigraph.dat"), (Join-Path $mock "tokencount"), (Join-Path $mock "identity.log"), (Join-Path $mock "invalidgrant") -ErrorAction SilentlyContinue
+    Utf8NoBom (Join-Path $data "secrets.json") '{ "navigraphClientId": "test-id", "navigraphClientSecret": "test-secret" }'
+    $sn = $baseSettings.Clone(); $sn.autoUpdate = $false; $sn.selfUpdate = $false; $sn.navigraphIdentity = "http://localhost:8766/identity"; $sn.navigraphHeartbeatSeconds = 3
+    $p6 = StartInstance $exe3 $sn
+    $page = "http://localhost:$port"
+    Check ((Call GET "/api/navigraph/session").json.state -eq "out") "not signed in at first"
+    $r = Call GET "/api/navigraph/access"; Check ($r.status -eq 401 -and $r.json.error -eq "not_signed_in") "no token while signed out"
+    $r = Call POST "/api/navigraph/login" "" $null $page; Check ($r.status -eq 202) "sign-in started from the hangar page"
+    $sawCode = $false
+    $in = WaitUntil { $s = (Call GET "/api/navigraph/session").json; if ($s.state -eq "waiting" -and $s.code.user_code -eq "MOCKCODE") { $script:sawCode = $true }; $s.state -eq "in" } 15
+    Check $sawCode "code, link and expiry offered while waiting (MOCKCODE)"
+    Check $in "signed in after the approval"
+    Check (WaitUntil { (Call GET "/api/navigraph/session").json.user -eq "mockpilot" } 5) "user name from userinfo"
+    $ilog = Get-Content (Join-Path $mock "identity.log") -ErrorAction SilentlyContinue
+    $dev = $ilog | ? { $_ -like "identity/connect/deviceauthorization*" } | Select-Object -First 1
+    Check ($dev -match "client_secret=test-secret" -and $dev -match "code_challenge_method=S256" -and $dev -match "code_challenge=[A-Za-z0-9_-]{43}") "device request: credentials added by the hangar, S256 challenge"
+    $tok = $ilog | ? { $_ -like "identity/connect/token |*" } | Select-Object -First 1
+    Check ($tok -match "code_verifier=[A-Za-z0-9_-]{43}" -and $tok -match "scope=openid") "token poll: PKCE verifier and scope"
+    $r = Call GET "/api/navigraph/access"; Check ($r.status -eq 200 -and $r.json.access_token -eq "AT-1" -and $r.json.expires_in -gt 0) "access token for the EFB"
+    $dat = Join-Path $data "navigraph.dat"
+    Check ((Test-Path $dat) -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($dat)) -match "RT-1")) "refresh token stored encrypted (DPAPI), not in plain text"
+    StopAll
+    $p7 = StartInstance $exe3 $sn
+    Check ((Call GET "/api/navigraph/session").json.state -eq "in") "still signed in after a restart"
+    $r = Call GET "/api/navigraph/access"; Check ($r.json.access_token -eq "AT-2") "after the restart: refreshed with the stored token (AT-2)"
+    StopAll
+    $p8 = StartInstance $exe3 $sn
+    $r = Call GET "/api/navigraph/access"; Check ($r.json.access_token -eq "AT-3") "rotated refresh token was stored and used (AT-3)"
+
+    Section "Navigraph account: who may get a token"
+    $evil = "https://evil.example"
+    Check ((Call GET "/api/navigraph/access" $null $null $evil).status -eq 403) "a web page cannot read the token"
+    Check ((Call POST "/api/navigraph/logout" "" $null $evil).status -eq 403) "a web page cannot sign out"
+    Check ((Call POST "/api/navigraph/login" "" $null $evil).status -eq 403) "a web page cannot start a sign-in"
+    $r = Call GET "/api/navigraph/session" $null $null $evil; Check ($r.status -eq 200 -and $r.text -notmatch "AT-|RT-") "the session state is public but carries no tokens"
+    Check ((Call GET "/api/navigraph/access" $null $null "coui://html_ui").json.access_token -eq "AT-3") "the sim (coui:// origin) gets the token"
+    $log = Get-Content (Join-Path $data "hangar.log") -Raw; Check ($log -match "refused /api/navigraph/access from origin https://evil.example") "refusals are logged with the origin"
+
+    Section "Navigraph account: heartbeat, sign-out, expired sign-in"
+    Remove-Item (Join-Path $mock "tokencount") -ErrorAction SilentlyContinue
+    $r = Call POST "/api/navigraph/logout" "" $null $page
+    Check ((Call GET "/api/navigraph/session").json.state -eq "out" -and -not (Test-Path $dat)) "sign-out removes the stored sign-in"
+    Check ((Call GET "/api/navigraph/access").status -eq 401) "no token after sign-out"
+    Utf8NoBom (Join-Path $mock "pending") "1"
+    Call POST "/api/navigraph/login" "" $null $page | Out-Null
+    Start-Sleep -Seconds 6     # nobody looks at the session (heartbeat 3 s)
+    $s = (Call GET "/api/navigraph/session").json
+    Check ($s.state -eq "out" -and $s.message -match "closed") "sign-in stops when nobody watches the sign-in screen ($($s.message))"
+    $polls = @(Get-Content (Join-Path $mock "identity.log") | ? { $_ -like "identity/connect/token |*" }).Count; Start-Sleep -Seconds 3
+    Check (@(Get-Content (Join-Path $mock "identity.log") | ? { $_ -like "identity/connect/token |*" }).Count -eq $polls) "no more token polls after that"
+    Call POST "/api/navigraph/login" "" $null $page | Out-Null
+    WaitUntil { (Call GET "/api/navigraph/session").json.state -eq "waiting" } 5 | Out-Null
+    Call POST "/api/navigraph/cancel" "" $null $page | Out-Null
+    Check ((Call GET "/api/navigraph/session").json.state -eq "out") "cancel ends a waiting sign-in"
+    Remove-Item (Join-Path $mock "pending"), (Join-Path $mock "tokencount") -ErrorAction SilentlyContinue
+    Call POST "/api/navigraph/login" "" $null $page | Out-Null
+    WaitUntil { (Call GET "/api/navigraph/session").json.state -eq "in" } 15 | Out-Null
+    StopAll; Utf8NoBom (Join-Path $mock "invalidgrant") "1"
+    $p9 = StartInstance $exe3 $sn
+    $r = Call GET "/api/navigraph/access"; $s = (Call GET "/api/navigraph/session").json
+    Check ($r.status -eq 401 -and $s.state -eq "out" -and $s.message -match "expired" -and -not (Test-Path $dat)) "rejected refresh token: signed out cleanly, asked to sign in again"
+    Remove-Item (Join-Path $mock "invalidgrant")
+    Utf8NoBom (Join-Path $data "secrets.json") '{}'
+    StopAll; $p10 = StartInstance $exe3 $sn
+    $r = Call POST "/api/navigraph/login" "" $null $page; Check ($r.status -eq 503 -and $r.json.error -eq "navigraph_not_configured") "no credentials installed: clear error"
+    StopAll
+
+    # ================= scenery overview =================
+    Section "Community folder overview (scenery)"
+    $sc = Join-Path $T "SceneryCommunity"; New-Item -ItemType Directory -Force $sc | Out-Null
+    function Pkg($folder, $type, $title, $hist) {
+        $d = Join-Path $sc $folder; New-Item -ItemType Directory -Force $d | Out-Null
+        if ($type) { Utf8NoBom (Join-Path $d "manifest.json") ('{ "content_type": "' + $type + '", "title": "' + $title + '", "creator": "Test Studio", "package_version": "1.2.3", "total_package_size": "00000000000104857600" }') }
+        if ($hist) { $ci = Join-Path $d "ContentInfo\$folder"; New-Item -ItemType Directory -Force $ci | Out-Null; Utf8NoBom (Join-Path $ci "ContentHistory.json") $hist }
+    }
+    Pkg "flytampa-eham-amsterdam" "SCENERY" "EHAM Amsterdam" '{ "items": [ { "type": "Airport", "content": "EHAM" }, { "type": "Airport", "content": "ehlE" }, { "type": "Other", "content": "XXXX" } ] }'
+    Pkg "orbx-ybbn-brisbane" "SCENERY" "Brisbane" $null
+    Pkg "aero-aircraft-at3" "AIRCRAFT" "Aero AT-3" $null
+    Pkg "broken-folder" $null $null $null
+    New-Item -ItemType Directory -Force (Join-Path $sc ".hangar_new_x") | Out-Null
+    $target = Join-Path $T "ExternalScenery"; New-Item -ItemType Directory -Force $target | Out-Null
+    Utf8NoBom (Join-Path $target "manifest.json") '{ "content_type": "SCENERY", "title": "Linked Scenery" }'
+    cmd /c mklink /J (Join-Path $sc "linked-scenery") $target | Out-Null
+    $ss = $baseSettings.Clone(); $ss.communityOverride = $sc; $ss.autoUpdate = $false; $ss.selfUpdate = $false
+    $p11 = StartInstance $exe3 $ss
+    $scan = (Call GET "/api/community?refresh=1").json
+    $byFolder = @{}; $scan.packages | % { $byFolder[$_.folder] = $_ }
+    Check ($scan.packages.Count -eq 5) "five packages, our temporary folder skipped ($($scan.packages.Count))"
+    Check ($scan.counts.SCENERY -eq 3 -and $scan.counts.AIRCRAFT -eq 1 -and $scan.counts.UNKNOWN -eq 1) "counted by type"
+    $e = $byFolder["flytampa-eham-amsterdam"]
+    Check ((($e.airports) -join ",") -eq "EHAM,EHLE" -and $e.airportsGuessed -eq $false) "airports from ContentHistory.json (EHAM, EHLE; other items ignored)"
+    Check ($e.creator -eq "Test Studio" -and $e.version -eq "1.2.3" -and $e.sizeMB -eq 100) "creator, version and size from the manifest"
+    $y = $byFolder["orbx-ybbn-brisbane"]; Check ((($y.airports) -join ",") -eq "YBBN" -and $y.airportsGuessed -eq $true) "ICAO guessed from the folder name and marked as a guess"
+    Check ($byFolder["broken-folder"].problem -eq "no manifest.json") "folder without a manifest flagged"
+    Check ($byFolder["linked-scenery"].linked -eq $true -and $byFolder["linked-scenery"].title -eq "Linked Scenery") "linked folder followed and flagged"
+    Check ((Call POST "/api/open-package" '{"folder":"..\\..\\Windows"}').status -eq 400) "open-package refuses paths outside the Community folder"
+    Check ((Call POST "/api/open-package" '{"folder":"orbx-ybbn-brisbane"}' $null "https://evil.example").status -eq 403) "a web page cannot open folders"
+    StopAll
+
+    # ================= "Check for updates" includes the hangar =================
+    Section "Check for updates: the hangar itself first"
+    $runDir4 = Join-Path $T "run4"; New-Item -ItemType Directory -Force $runDir4 | Out-Null; Copy-Item $exe (Join-Path $runDir4 "JetstreamHangar.exe")
+    $sh = $baseSettings.Clone(); $sh.autoUpdate = $false; $sh.selfUpdate = $false; $sh.hangarRepo = "test/hangar"; $sh.startDelayMs = 600000
+    $p12 = StartInstance (Join-Path $runDir4 "JetstreamHangar.exe") $sh
+    $st0 = (Call GET "/api/status").json.selfUpdate
+    Check ($st0.current -eq $curVer) "status shows the running version ($($st0.current))"
+    Check ((Call POST "/api/check-updates" "" $null $page).status -eq 202) "check for updates accepted"
+    $av = WaitUntil { (Call GET "/api/status").json.selfUpdate.state -eq "available" } 15
+    $st1 = (Call GET "/api/status").json.selfUpdate
+    Check ($av -and $st1.latest -eq "9.9.9") "self-update off: the newer hangar is reported, not installed ($($st1.message))"
+    Check ((Call GET "/api/ping").json.version -ne "9.9.9") "still the old version until asked"
+    Call POST "/api/self-update" "" $null $page | Out-Null
+    Check (WaitUntil { (Call GET "/api/ping").json.version -eq "9.9.9" } 25) "update hangar button installs 9.9.9 and restarts"
     StopAll}
 finally {
     try { Stop-Process -Id $proc.Id -Force } catch { }

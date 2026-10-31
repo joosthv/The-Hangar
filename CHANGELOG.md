@@ -4,6 +4,27 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+### Added
+- **Navigraph account in the hangar**: sign in once on the Library page (link, QR code and user code); the sign-in
+  is kept encrypted (Windows DPAPI) and the aircraft EFBs get their chart tokens from the hangar - no sign-in in the
+  cockpit. A sign-in started in an EFB is run by the hangar too, so there is one Navigraph session.
+- **Scenery tab**: everything in the Community folder - scenery with its airports (ICAO, from ContentHistory.json or
+  guessed from the folder name), creator, version, size, linked folders and broken packages; search and type filter,
+  open a package folder.
+- The running version is shown in the header, with its update state ("up to date", "available - click to update",
+  "updating").
+- New logo and app / tray icon: the Jetstream Virtual compass rose; tagline in the header.
+
+### Changed
+- "Check for updates" (page and tray) checks Jetstream Hangar itself first, then the aircraft. With self-update off a
+  newer hangar is reported with an update button instead of being ignored.
+
+### Fixed
+- Navigraph credentials missed at start-up (EFB backend not ready) are now read again when needed.
+
+### Security
+- Navigraph tokens and sign-in actions are only available to the sim and the hangar page; other web pages are
+  refused and the refusal is logged.
 
 ## [1.0.1] - 2026-10-31
 ### Fixed

@@ -59,3 +59,28 @@ input, select { background: var(--panel); border: 1px solid var(--line); color: 
 input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .actions { display: flex; gap: 8px; }
 @media (max-width: 700px) { .card { grid-template-columns: 1fr; } .thumb { min-height: 120px; } header { gap: 10px; } }
+.account { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+.acct-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.acct-head h2 { margin: 0 12px 0 0; font-size: 18px; display: inline; }
+.ngcode { display: flex; gap: 20px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+.ngcode canvas { background: #fff; border-radius: 8px; width: 200px; height: 200px; }
+.ngcode a { color: #79c0ff; }
+.usercode { font: 700 32px/1.2 Consolas, monospace; letter-spacing: 4px; padding: 8px 16px; border: 2px solid var(--accent); border-radius: 8px; display: inline-block; margin: 6px 0; }
+.small { font-size: 12px; margin: 10px 0 0; }
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.filters input { flex: 1 1 260px; }
+.pkglist { display: grid; gap: 8px; }
+.pkg { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.pkg .t { font-weight: 600; }
+.pkg .meta { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.pkg .side { display: flex; gap: 8px; align-items: center; grid-row: span 2; }
+.icao { font: 600 12px Consolas, monospace; padding: 2px 7px; border-radius: 5px; background: #0f2a4a; color: #a5c8ff; border: 1px solid #1f6feb; }
+.icao.guess { border-style: dashed; background: none; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
+.tag.warn { color: var(--warn); border-color: #9e6a03; }
+.pkg button { padding: 5px 10px; font-size: 13px; }
+.ver { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.chip.link { cursor: pointer; text-decoration: underline; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img.logo { width: 34px; height: 34px; }
+.tagline { font-size: 11px; font-weight: 400; color: #9aa4ae; letter-spacing: .2px; }
