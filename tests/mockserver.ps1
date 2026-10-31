@@ -35,7 +35,22 @@ while ($l.IsListening) {
         $ctx.Response.Close()
         continue
     }
+    # a file "ratelimit" in the mock root makes the API and the catalogue answer like GitHub with an exhausted rate limit
+    if ((Test-Path (Join-Path $Root 'ratelimit')) -and $p -notlike 'dl/*') {
+        $ctx.Response.StatusCode = 403; $ctx.Response.Headers['X-RateLimit-Remaining'] = '0'
+        $ctx.Response.Headers['X-RateLimit-Reset'] = [string]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 1800)
+        Add-Content (Join-Path $Root 'requests.log') "$p 403"
+        $ctx.Response.Close()
+        continue
+    }
     $f = Join-Path $Root $p
-    if (Test-Path $f -PathType Leaf) { $b = [IO.File]::ReadAllBytes($f); $ctx.Response.OutputStream.Write($b, 0, $b.Length) } else { $ctx.Response.StatusCode = 404 }
+    if (Test-Path $f -PathType Leaf) {
+        # ETag per content; If-None-Match with the same tag answers 304 like GitHub
+        $b = [IO.File]::ReadAllBytes($f)
+        $etag = '"' + [BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash($b)).Replace('-', '') + '"'
+        $ctx.Response.Headers['ETag'] = $etag
+        if ($ctx.Request.Headers['If-None-Match'] -eq $etag) { $ctx.Response.StatusCode = 304; Add-Content (Join-Path $Root 'requests.log') "$p 304" }
+        else { $ctx.Response.OutputStream.Write($b, 0, $b.Length) }
+    } else { $ctx.Response.StatusCode = 404 }
     $ctx.Response.Close()
 }

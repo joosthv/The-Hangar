@@ -128,6 +128,24 @@ Section "API security (browser pages cannot drive the hangar)"
     Check ($D.releaseError -match "No release") "D: no release yet ($($D.releaseError))"
     Check ($E.latestVersion -eq "3.2.1") "E: tag without prefix (v3.2.1)"
 
+    Section "GitHub rate limit and cache"
+    Remove-Item (Join-Path $mock "requests.log") -ErrorAction SilentlyContinue
+    $cat2 = (Call GET "/api/catalog?refresh=1").json
+    $log = Get-Content (Join-Path $mock "requests.log") -ErrorAction SilentlyContinue
+    Check (($log | ? { $_ -like "* 304" }).Count -ge 2 -and ($cat2 | ? id -eq "a").latestVersion -eq "1.1.0") "unchanged catalogue and releases answered with 304 from the cache"
+    New-Item -ItemType File -Force (Join-Path $mock "ratelimit") | Out-Null
+    $rl = Call GET "/api/catalog?refresh=1"; $A5 = $rl.json | ? id -eq "a"
+    Check ($rl.status -eq 200 -and $A5.latestVersion -eq "1.1.0" -and -not $A5.releaseError) "rate limited: last known catalogue and releases still shown"
+    $st = (Call GET "/api/status").json
+    Check ($st.githubNotice -match "rate limit reached until \d\d:\d\d" -and $st.githubNotice -match "last known") "rate limit notice for the UI ($($st.githubNotice))"
+    Call POST "/api/settings" '{"catalogUrl":"http://localhost:8766/fresh/catalog.json"}' | Out-Null
+    $rl2 = Call GET "/api/catalog?refresh=1"
+    Check ($rl2.status -eq 500 -and $rl2.json.error -match "rate limit reached") "rate limited without a cache: clear error ($($rl2.json.error))"
+    Call POST "/api/settings" '{"catalogUrl":"http://localhost:8766/catalog.json"}' | Out-Null
+    Remove-Item (Join-Path $mock "ratelimit")
+    Call GET "/api/catalog?refresh=1" | Out-Null
+    Check ([string]::IsNullOrEmpty((Call GET "/api/status").json.githubNotice)) "notice cleared once GitHub answers again"
+
     Section "install and update"
     Remove-Item (Join-Path $mock "requests.log") -ErrorAction SilentlyContinue
     $r = Call POST "/api/install" '{"id":"a"}'; Check ($r.status -eq 202) "update A accepted"
@@ -275,6 +293,12 @@ Section "API security (browser pages cannot drive the hangar)"
     $logText = Get-Content (Join-Path $data "hangar.log") -Raw -ErrorAction SilentlyContinue
     Check ($logText -match "catalogue not available|update check failed") "the failure is written to hangar.log"
     $c404 = Call GET "/api/catalog?refresh=1"; Check ($c404.status -eq 500 -and $c404.json.error) "catalogue error reported to the UI ($($c404.json.error))"
+    StopAll
+
+    Section "settings of 1.0.1 migrate to the rate-limit free catalogue"
+    $s5 = $baseSettings.Clone(); $s5.catalogUrl = "https://api.github.com/repos/joosthv/The-Hangar/contents/catalog.json"; $s5.autoUpdate = $false; $s5.selfUpdate = $false
+    $p6 = StartInstance (Join-Path $runDir2 "JetstreamHangar.exe") $s5
+    Check ((Call GET "/api/settings").json.catalogUrl -eq "https://raw.githubusercontent.com/joosthv/The-Hangar/main/catalog.json") "old contents-API catalogue URL replaced by raw.githubusercontent.com"
     StopAll
 
     Section "install, reinstall over a running copy, uninstall"

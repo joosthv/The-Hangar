@@ -5,7 +5,7 @@
 | --- | --- |
 | `src/Hangar.cs` | everything: tray app (`Hangar`), `Settings`, `Community`, `Autostart`, `GitHub`, `Library`, `Sync`, `Api`, `SelfUpdate` |
 | `web/` | UI (index.html, app.js, style.css), embedded as resources `web.<file>`; a `web` folder next to the exe overrides them (UI development) |
-| `catalog.json` | aircraft catalogue; read by running hangars through the GitHub contents API |
+| `catalog.json` | aircraft catalogue; read by running hangars from raw.githubusercontent.com (no API rate limit) |
 | `VERSION` | version compiled in by `build.ps1` (generated class `HangarBuild`) |
 | `tests/` | `run_tests.ps1` end-to-end suite, `mockserver.ps1` mock GitHub |
 
@@ -18,7 +18,7 @@
 ### Settings (`settings.json`)
 | Key | Default | Use |
 | --- | --- | --- |
-| `catalogUrl` | `https://api.github.com/repos/joosthv/The-Hangar/contents/catalog.json` | catalogue (contents API: default branch, works for private repos with a token) |
+| `catalogUrl` | `https://raw.githubusercontent.com/joosthv/The-Hangar/main/catalog.json` | catalogue; the 1.0.0/1.0.1 default (contents API) is migrated on start. A contents-API URL still works (private repos with a token) but counts against the rate limit |
 | `communityOverride` | empty | otherwise detected from `UserCfg.opt` (`InstalledPackagesPath`) |
 | `githubToken` | empty | needed while repositories are private; never returned by the API (`"set"`) |
 | `checkHours` | 6 | update check interval |
@@ -64,6 +64,11 @@ removes the folder through a short-lived hidden cmd. Test overrides: `JETSTREAM_
 ### Robustness
 Unhandled exceptions are logged (`hangar.log`); the update loop catches every error per iteration (1.0.0 crashed
 when the catalogue was unreachable).
+`GitHub.GetText` keeps every answer in `%APPDATA%\JetstreamHangar\cache\<sha1(url)>.json` with its ETag and sends
+`If-None-Match` next time (304 = unchanged). On a 403/429 rate limit or a network error the cached body is used and
+`GitHub.Notice` (status field `githubNotice`, shown on the Library page) explains it; a 404 never falls back. Without
+a token GitHub allows 60 API requests per hour per IP - test runs and `gh` calls on this PC count too. Tests: mock
+flag file `tests\mock\ratelimit`.
 
 ### Navigraph account (`NavigraphAuth`)
 Device-authorization flow with PKCE run by the hangar (`POST /api/navigraph/login`). Polling only while a client

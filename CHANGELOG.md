@@ -21,6 +21,10 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 
 ### Fixed
 - Navigraph credentials missed at start-up (EFB backend not ready) are now read again when needed.
+- "Could not load the catalogue: (403)": the catalogue is now read from raw.githubusercontent.com, which does not
+  count against GitHub's limit of 60 API requests per hour (existing settings are migrated). GitHub answers are kept
+  on disk with their ETag, so unchanged release lists cost a 304; when GitHub refuses or cannot be reached, the last
+  known versions are shown with a notice ("GitHub rate limit reached until hh:mm").
 
 ### Security
 - Navigraph tokens and sign-in actions are only available to the sim and the hangar page; other web pages are

@@ -228,7 +228,9 @@ static class Hangar
 // ---------------- settings (%APPDATA%\JetstreamHangar\settings.json) and secrets (secrets.json) ----------------
 static class Settings
 {
-    public const string DefaultCatalog = "https://api.github.com/repos/joosthv/The-Hangar/contents/catalog.json";
+    // raw.githubusercontent.com is not counted against the GitHub API rate limit (60 requests per hour without a token)
+    public const string DefaultCatalog = "https://raw.githubusercontent.com/joosthv/The-Hangar/main/catalog.json";
+    const string OldDefaultCatalog = "https://api.github.com/repos/joosthv/The-Hangar/contents/catalog.json";   // 1.0.0 - 1.0.1
     static Dictionary<string, object> s = new Dictionary<string, object>();
     static Dictionary<string, object> secrets = new Dictionary<string, object>();
     static readonly object gate = new object();
@@ -244,7 +246,7 @@ static class Settings
             // secrets.json may also ship next to the exe (written by the installer / build)
             if (secrets.Count == 0) secrets = ReadJson(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "secrets.json")) ?? secrets;
             // default catalogue: catalog.json in the The-Hangar repository (contents API: default branch, public or private)
-            if (!s.ContainsKey("catalogUrl")) s["catalogUrl"] = DefaultCatalog;
+            if (!s.ContainsKey("catalogUrl") || Convert.ToString(s["catalogUrl"]) == OldDefaultCatalog) s["catalogUrl"] = DefaultCatalog;
             if (!s.ContainsKey("checkHours")) s["checkHours"] = 6;
             if (!s.ContainsKey("prerelease")) s["prerelease"] = false;
             if (!s.ContainsKey("autoUpdate")) s["autoUpdate"] = true;     // install new aircraft releases automatically
@@ -383,11 +385,57 @@ static class GitHub
         var plain = Request(url, "application/octet-stream");
         return (HttpWebResponse)plain.GetResponse();
     }
+    // Every answer is kept in DataDir\cache with its ETag: repeated checks are conditional requests (304 = unchanged), and
+    // when GitHub refuses (rate limit) or cannot be reached the last known answer is used and a notice is shown.
+    static readonly Dictionary<string, string> notices = new Dictionary<string, string>();
+    public static string Notice { get { lock (notices) return string.Join(" ", notices.Values.Distinct().ToArray()); } }
+    static string CacheFile(string url)
+    {
+        var dir = Path.Combine(Hangar.DataDir, "cache"); Directory.CreateDirectory(dir);
+        using (var sha = SHA1.Create()) return Path.Combine(dir, BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(url))).Replace("-", "").ToLowerInvariant() + ".json");
+    }
     public static string GetText(string url)
     {
+        var cf = CacheFile(url); var cached = Settings.ReadJson(cf);
+        string cachedBody = cached != null && cached.ContainsKey("body") ? Convert.ToString(cached["body"]) : null;
         // the contents API returns the file itself with the raw media type
-        using (var resp = (HttpWebResponse)Request(url, url.Contains("/contents/") ? "application/vnd.github.raw" : null).GetResponse())
-        using (var sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8)) return sr.ReadToEnd();
+        var r = Request(url, url.Contains("/contents/") ? "application/vnd.github.raw" : null);
+        if (cachedBody != null && cached.ContainsKey("etag") && Convert.ToString(cached["etag"]).Length > 0) r.Headers["If-None-Match"] = Convert.ToString(cached["etag"]);
+        try
+        {
+            using (var resp = (HttpWebResponse)r.GetResponse())
+            {
+                lock (notices) notices.Remove(url);
+                if (resp.StatusCode == HttpStatusCode.NotModified && cachedBody != null) return cachedBody;
+                string body; using (var sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8)) body = sr.ReadToEnd();
+                try { File.WriteAllText(cf, Hangar.Json.Serialize(new Dictionary<string, object> { { "url", url }, { "etag", resp.Headers["ETag"] ?? "" }, { "body", body } })); } catch { }
+                return body;
+            }
+        }
+        catch (WebException e)
+        {
+            var hr = e.Response as HttpWebResponse;
+            if (hr != null && hr.StatusCode == HttpStatusCode.NotModified && cachedBody != null) { lock (notices) notices.Remove(url); return cachedBody; }
+            string why = Describe(e);
+            if (hr != null && hr.StatusCode == HttpStatusCode.NotFound) throw new Exception(why);   // gone: never show stale data
+            if (cachedBody == null) throw new Exception(why);
+            Hangar.Log("GitHub: " + why + " - using the cached answer for " + url);
+            lock (notices) notices[url] = why + " Showing the last known versions.";
+            return cachedBody;
+        }
+    }
+    static string Describe(WebException e)
+    {
+        var hr = e.Response as HttpWebResponse;
+        if (hr == null) return "GitHub could not be reached (" + e.Message + ").";
+        int code = (int)hr.StatusCode;
+        if ((code == 403 || code == 429) && (hr.Headers["X-RateLimit-Remaining"] == "0" || hr.Headers["Retry-After"] != null))
+        {
+            long reset; string when = "";
+            if (long.TryParse(hr.Headers["X-RateLimit-Reset"], out reset)) when = " until " + new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(reset).ToLocalTime().ToString("HH:mm");
+            return "GitHub rate limit reached" + when + (Settings.Get("githubToken").Length > 0 ? "." : " (60 requests per hour without a token; a GitHub token under Settings raises it).");
+        }
+        return "GitHub answered " + code + " " + hr.StatusDescription + ".";
     }
     // newest release whose tag starts with the aircraft's prefix and that carries its zip asset
     public static Dictionary<string, object> LatestRelease(string repo, string tagPrefix, string assetPrefix) { return LatestRelease(repo, tagPrefix, assetPrefix, ".zip"); }
@@ -688,7 +736,7 @@ static class Api
             Send(res, 200, new Dictionary<string, object> {
                 { "app", Hangar.AppName }, { "version", Hangar.AppVersion }, { "community", Community.Path_ }, { "communityOk", Community.Path_.Length > 0 && Directory.Exists(Community.Path_) },
                 { "simRunning", Community.SimRunning() }, { "navigraph", Settings.Secret("navigraphClientId").Length > 0 }, { "catalogUrl", Settings.Get("catalogUrl") },
-                { "autoUpdate", Settings.GetBool("autoUpdate") }, { "waiting", Library.Waiting.ToArray() }, { "selfUpdate", SelfUpdate.Status } });
+                { "autoUpdate", Settings.GetBool("autoUpdate") }, { "waiting", Library.Waiting.ToArray() }, { "selfUpdate", SelfUpdate.Status }, { "githubNotice", GitHub.Notice } });
             return;
         }
         if (path == "/api/check-updates" && m == "POST") { ThreadPool.QueueUserWorkItem(delegate { Hangar.CheckEverything(false); }); Send(res, 202, new Dictionary<string, object>()); return; }

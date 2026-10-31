@@ -48,6 +48,7 @@ async function loadLibrary(refresh) {
         if (!ok) { notice("Could not load the catalogue: " + (j.error || "error"), true); return; }
         items = j; render();
         if (!j.length) notice("The catalogue lists no aircraft yet.");
+        else { const s = (await api("status")).j; notice(s.githubNotice || ""); }
     } catch (e) { notice("Could not reach the hangar service: " + e, true); }
     finally { $("#refresh").disabled = false; }
 }

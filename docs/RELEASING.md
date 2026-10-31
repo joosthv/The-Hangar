@@ -35,7 +35,8 @@ Developer builds (`dist\`, with `portable.txt`) run in place and never install t
 
 ## Catalogue changes (no new hangar version needed)
 Edit `catalog.json` (add an aircraft, change a description), commit, push to `main`. Running hangars read it through
-the GitHub contents API on their next catalogue refresh (cached 10 minutes).
+raw.githubusercontent.com on their next catalogue refresh (cached 10 minutes in the hangar, up to ~5 minutes on
+GitHub's CDN).
 
 ## When a release is bad
 - Stop it: `gh release edit hangar-vx.y.z --repo joosthv/The-Hangar --draft` (drafts are ignored).
