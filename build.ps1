@@ -56,9 +56,15 @@ $off = 6 + 16 * $sizes.Count
 for ($i = 0; $i -lt $sizes.Count; $i++) { $d = if ($sizes[$i] -ge 256) { 0 } else { $sizes[$i] }; $w.Write([byte]$d); $w.Write([byte]$d); $w.Write([byte]0); $w.Write([byte]0); $w.Write([uint16]1); $w.Write([uint16]32); $w.Write([uint32]$pngs[$i].Length); $w.Write([uint32]$off); $off += $pngs[$i].Length }
 foreach ($p in $pngs) { $w.Write($p) }
 $w.Close()
-$res = Get-ChildItem (Join-Path $here "web") -File | % { "/resource:$($_.FullName),web.$($_.Name)" }
+$res = @(Get-ChildItem (Join-Path $here "web") -File | % { "/resource:$($_.FullName),web.$($_.Name)" })
+# SimConnect.dll (Microsoft, MSFS 2024 SDK redistributable) is embedded for the METAR feed; the hangar extracts it to its
+# data folder. Release builds refuse to go without it; developer builds warn.
+$simConnect = if ($env:MSFS2024_SDK) { Join-Path $env:MSFS2024_SDK "SimConnect SDK\lib\SimConnect.dll" } else { "C:\MSFS 2024 SDK\SimConnect SDK\lib\SimConnect.dll" }
+if (Test-Path $simConnect) { $res += "/resource:$simConnect,native.SimConnect.dll" }
+elseif ($Release) { "BUILD FAILED: SimConnect.dll not found ($simConnect): install the MSFS 2024 SDK or set MSFS2024_SDK"; exit 1 }
+else { "warning: SimConnect.dll not found ($simConnect), built without the METAR sim feed DLL" }
 $refs = "System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll", "System.Web.Extensions.dll", "System.Security.dll", "System.Management.dll","$fw\System.IO.Compression.dll", "$fw\System.IO.Compression.FileSystem.dll" | % { "/reference:$_" }
-& $csc /nologo /target:winexe /optimize+ "/win32icon:$ico" "/out:$OutDir\JetstreamHangar.exe" $refs $res (Join-Path $here "src\Hangar.cs") $gen
+& $csc /nologo /target:winexe /optimize+ "/win32icon:$ico" "/out:$OutDir\JetstreamHangar.exe" $refs $res (Get-ChildItem (Join-Path $here "src\*.cs") | % FullName) $gen
 $ok = $LASTEXITCODE -eq 0
 Remove-Item $gen, $ico -ErrorAction SilentlyContinue
 if (-not $ok) { "BUILD FAILED"; exit 1 }

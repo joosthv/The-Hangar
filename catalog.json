@@ -137,6 +137,18 @@
                          "registration":  "G-MAVV",
                          "scene":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-hangar.jpg",
                          "sceneCard":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-hangar-card.jpg"
+                     },
+                     {
+                         "id":  "jetstream-hangar-toolbar",
+                         "name":  "Jetstream Hangar toolbar panel",
+                         "kind":  "addon",
+                         "autoInstall":  true,
+                         "manufacturer":  "Jetstream Virtual",
+                         "description":  "MSFS 2024 toolbar panel for every aircraft: the Jetstream Virtual hangars near you with their doors (open / close, position), and whether Jetstream Hangar is running. Comes with the hangar.",
+                         "package":  "jetstream-hangar-toolbar",
+                         "github":  "joosthv/The-Hangar",
+                         "tagPrefix":  "toolbar-v",
+                         "assetPrefix":  "jetstream-hangar-toolbar"
                      }
                  ]
 }

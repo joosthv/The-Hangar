@@ -73,7 +73,7 @@ function notesHtml(md) {
 
 function render() {
     const host = $("#cards"); host.innerHTML = "";
-    for (const a of items) host.appendChild(cardEl(a, true));
+    for (const a of items) host.appendChild(cardEl(a, a.kind !== "addon"));   // add-ons (toolbar panel): plain card, no hangar picture
     if (typeof renderAircraft === "function") renderAircraft();
 }
 

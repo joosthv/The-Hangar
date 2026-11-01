@@ -561,6 +561,61 @@ Section "API security (browser pages cannot drive the hangar)"
     Check ((Call GET "/api/ping").json.version -ne "9.9.9") "still the old version until asked"
     Call POST "/api/self-update" "" $null $page | Out-Null
     Check (WaitUntil { (Call GET "/api/ping").json.version -eq "9.9.9" } 25) "update hangar button installs 9.9.9 and restarts"
+    StopAll
+
+    Section "METAR for the hangar weather board (and the sim feed without MSFS)"
+    $obs = [int][double]::Parse((Get-Date).ToUniversalTime().AddMinutes(-20).Subtract([datetime]'1970-01-01').TotalSeconds.ToString("0"))
+    Utf8NoBom (Join-Path $mock "metar_KFHR.json") ('[{"icaoId":"KTOP","rawOb":"other","obsTime":1,"clouds":[]},{"icaoId":"KFHR","obsTime":' + $obs + ',"rawOb":"KFHR 011553Z 30014KT 10SM FEW025 BKN040 OVC080 09/04 A3001","clouds":[{"cover":"FEW","base":2500},{"cover":"BKN","base":4000},{"cover":"OVC","base":8000},{"cover":"OVC","base":12000}]}]')
+    Utf8NoBom (Join-Path $mock "metar_EHAM.json") '[{"icaoId":"EHAM","obsTime":1,"rawOb":"EHAM CAVOK","clouds":[{"cover":"CAVOK","base":null}]}]'
+    $sm = $baseSettings.Clone(); $sm.metarUrl = "http://localhost:8766/metar_{ids}.json"; $sm.autoUpdate = $false; $sm.selfUpdate = $false
+    $null = StartInstance (Join-Path $runDir "JetstreamHangar.exe") $sm
+    $mt = (Call GET "/api/metar?refresh=1").json
+    Check ($mt.station -eq "KFHR" -and $mt.raw -match "FEW025 BKN040") "KFHR METAR fetched, the station's report picked from the list"
+    Check ($mt.layers.Count -eq 3 -and $mt.layers[0][0] -eq 1 -and $mt.layers[0][1] -eq 25 -and $mt.layers[1][0] -eq 3 -and $mt.layers[1][1] -eq 40 -and $mt.layers[2][0] -eq 4 -and $mt.layers[2][1] -eq 80) "layers FEW 025, BKN 040, OVC 080 (a fourth layer is dropped)"
+    Check ($mt.ageMinutes -ge 19 -and $mt.ageMinutes -le 22) "age about 20 minutes ($($mt.ageMinutes))"
+    Check (($mt.simValues -join ',') -eq "1,20,1,25,3,40,4,80" -or ($mt.simValues -join ',') -eq "1,21,1,25,3,40,4,80") "values for the sim: valid, age, cover/base x3 ($($mt.simValues -join ','))"
+    Check ($mt.simFeed -match "waiting for MSFS|starting") "no MSFS: the feed waits ($($mt.simFeed))"
+    Check ((Call GET "/api/metar" $null $null "https://evil.example").status -eq 200) "METAR open to the sim and pages (read only)"
+    $sdkDll = "C:\MSFS 2024 SDK\SimConnect SDK\lib\SimConnect.dll"
+    $ownDll = Join-Path $data "bin\SimConnect.dll"
+    $null = WaitUntil { (Call GET "/api/metar").json.simConnectDll -ne "" } 15
+    $mt = (Call GET "/api/metar").json
+    Check ($mt.simConnectDll -eq $ownDll -and (Test-Path $ownDll)) "SimConnect.dll comes with the hangar: extracted to its data folder ($($mt.simConnectDll))"
+    if (Test-Path $sdkDll) { Check ((Get-FileHash $ownDll).Hash -eq (Get-FileHash $sdkDll).Hash) "the extracted SimConnect.dll is the SDK's" }
+    StopAll
+    Set-Content $ownDll "damaged" -Encoding Ascii
+    $null = StartInstance (Join-Path $runDir "JetstreamHangar.exe") $sm
+    $null = WaitUntil { (Call GET "/api/metar").json.simConnectDll -ne "" } 15
+    Check ((Get-Item $ownDll).Length -gt 1000) "a damaged SimConnect.dll in the data folder is written again at start"
+    StopAll
+    $sm.metarStations = "EHAM"; $null = StartInstance (Join-Path $runDir "JetstreamHangar.exe") $sm
+    $mt = (Call GET "/api/metar?refresh=1").json
+    Check ($mt.station -eq "EHAM" -and $mt.layers.Count -eq 0 -and $mt.simValues[0] -eq 0) "CAVOK: no layers; a 50-year-old METAR is not valid for the board"
+    $sm.metarUrl = "http://localhost:8766/missing_{ids}.json"; StopAll; $null = StartInstance (Join-Path $runDir "JetstreamHangar.exe") $sm
+    $mt = (Call GET "/api/metar?refresh=1").json
+    Check ($mt.error -match "METAR" -and $mt.simValues[0] -eq 0 -and (Call GET "/api/ping").status -eq 200) "METAR source down: reported, board shows no METAR, hangar keeps running"
+    StopAll
+
+    Section "add-ons that come with the hangar (autoInstall, the toolbar panel)"
+    $fZip = MakeZip "test-pkg-f" "1.0.0"
+    WriteReleases "test\f" @((Release "toolbar-v1.0.0" @(Asset "test-pkg-f-1.0.0.zip" (Get-Item $fZip).Length)))
+    $catF = @{ version = 1; aircraft = @(
+        @{ id = "a"; name = "Aircraft A"; package = "test-pkg-a"; github = "test/a"; tagPrefix = "at3-v"; assetPrefix = "test-pkg-a" },
+        @{ id = "f"; name = "Toolbar F"; kind = "addon"; autoInstall = $true; package = "test-pkg-f"; github = "test/f"; tagPrefix = "toolbar-v"; assetPrefix = "test-pkg-f" }) }
+    Utf8NoBom (Join-Path $mock "catalog_addon.json") (ConvertTo-Json $catF -Depth 5)
+    $preF = Join-Path $community "test-pkg-f"
+    Remove-Item $preF -Recurse -Force -ErrorAction SilentlyContinue
+    $sf = $baseSettings.Clone(); $sf.catalogUrl = "http://localhost:8766/catalog_addon.json"; $sf.autoUpdate = $true; $sf.selfUpdate = $false
+    $null = StartInstance (Join-Path $runDir "JetstreamHangar.exe") $sf
+    Check (WaitUntil { Test-Path (Join-Path $preF "manifest.json") } 20) "the add-on is installed without a click"
+    $cf = ((Call GET "/api/catalog").json | ? { $_.id -eq "f" })
+    Check ($cf.kind -eq "addon" -and $cf.installed -and $cf.installedVersion -eq "1.0.0") "catalogue shows the add-on as installed 1.0.0"
+    Check ((Get-Content (Join-Path $data "settings.json") -Raw | ConvertFrom-Json)."autoInstalled.f" -eq $true) "remembered as installed once (autoInstalled.f)"
+    $r = Call POST "/api/uninstall" '{"id":"f"}' $null $page; WaitJob | Out-Null
+    Check (-not (Test-Path $preF)) "the user can uninstall it"
+    Check ((Call POST "/api/check-updates" "" $null $page).status -eq 202) "check for updates after the uninstall"
+    Start-Sleep -Seconds 4
+    Check (-not (Test-Path $preF)) "an add-on the user uninstalled is not installed again"
     StopAll}
 finally {
     try { Stop-Process -Id $proc.Id -Force } catch { }

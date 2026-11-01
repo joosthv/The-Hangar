@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Jetstream Hangar toolbar panel for MSFS 2024: works in every aircraft. Built by toolbar\build_toolbar.ps1, installed
+     and updated by the Jetstream Hangar app (catalogue entry "jetstream-hangar-toolbar", autoInstall). -->
+<AssetPackage Version="1.0.0">
+	<ItemSettings>
+		<ContentType>MISC</ContentType>
+		<Title>Jetstream Hangar Toolbar</Title>
+		<Manufacturer>Jetstream Virtual</Manufacturer>
+		<Creator>Jetstream Virtual</Creator>
+	</ItemSettings>
+	<Flags>
+		<VisibleInStore>false</VisibleInStore>
+		<CanBeReferenced>false</CanBeReferenced>
+	</Flags>
+	<PackageOrderHint>CUSTOM_SIMOBJECTS</PackageOrderHint>
+	<AssetGroups>
+		<AssetGroup Name="ContentInfo">
+			<Type>Copy</Type>
+			<Flags>
+				<FSXCompatibility>false</FSXCompatibility>
+			</Flags>
+			<AssetDir>PackageDefinitions\jetstream-hangar-toolbar\ContentInfo\</AssetDir>
+			<OutputDir>ContentInfo\jetstream-hangar-toolbar\</OutputDir>
+		</AssetGroup>
+		<AssetGroup Name="panel">
+			<Type>SPB</Type>
+			<Flags>
+				<FSXCompatibility>false</FSXCompatibility>
+			</Flags>
+			<AssetDir>PackageSources\InGamePanels\</AssetDir>
+			<OutputDir>InGamePanels\</OutputDir>
+		</AssetGroup>
+		<AssetGroup Name="ui">
+			<Type>Copy</Type>
+			<Flags>
+				<FSXCompatibility>false</FSXCompatibility>
+			</Flags>
+			<AssetDir>PackageSources\html_ui\</AssetDir>
+			<OutputDir>html_ui\</OutputDir>
+		</AssetGroup>
+	</AssetGroups>
+</AssetPackage>

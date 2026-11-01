@@ -5,6 +5,21 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-01
+### Added
+- **Toolbar panel in MSFS 2024** (every aircraft): the Jetstream Virtual hangars near you with the door position and
+  OPEN / CLOSE, and whether Jetstream Hangar is running. It comes with the hangar: installed automatically once and
+  updated like the aircraft; uninstall it and it stays away. Source in `toolbar\` (`toolbar\build_toolbar.ps1`),
+  released as `toolbar-v<version>`.
+- The aircraft picture shows the AT-3 in the Jetstream Virtual hangar at Friday Harbor (KFHR).
+- Catalogue add-ons (`"kind": "addon"`, `"autoInstall": true`): shown as a plain card, installed without a click.
+- **METAR into the sim** for the Jetstream Virtual hangar's weather board: the KFHR METAR (aviationweather.gov, every
+  5 min) is written into MSFS through SimConnect while the sim runs (`L:JV_WX_VALID`, `L:JV_WX_AGE`,
+  `L:JV_WX_C1..3_COVER` / `_BASE`). Microsoft's SimConnect.dll (MSFS 2024 SDK) comes with the hangar: it is built
+  into the exe and written to `%APPDATA%\JetstreamHangar\bin` (rewritten when missing or damaged); a copy next to the
+  exe, or the `simConnectDll` setting, goes first. Without SimConnect the hangar runs as before. `GET /api/metar` shows the report and the feed state. Settings: `metarStations`,
+  `metarUrl`, `simFeed` ("off").
+
 ## [1.0.5] - 2026-11-01
 ### Added
 - **The hangar**: every aircraft is shown standing in the Jetstream Virtual GA hangar at a small airfield (steel hangar

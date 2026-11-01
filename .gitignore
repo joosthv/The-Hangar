@@ -13,3 +13,11 @@ secrets.json
 .vscode/
 Thumbs.db
 desktop.ini
+
+# EFB app (Flight Prep): npm packages and build output
+efbapp/**/node_modules/
+efbapp/**/dist/
+!efbapp/PackageSources/efb_api/dist/
+# toolbar / EFB SDK build output
+toolbar/_PackageInt/
+efbapp/_PackageInt/

@@ -42,6 +42,11 @@ Refused while MSFS runs. Uninstall only removes folders that contain a `manifest
 | `GET /api/ping` | EFB detects the hangar |
 | `POST /api/navigraph/deviceauthorization`, `/api/navigraph/token` | Navigraph device flow; the hangar adds its own Navigraph client (built into release builds); users only sign in with the QR code / link |
 | `GET/POST /api/aircraft/<id>/state` | technical state synced by the EFB, shown on the aircraft card |
+| `GET /api/metar` | the hangar airfield's METAR and the state of the SimConnect feed into the sim |
+
+## Third-party code
+`SimConnect.dll` is Microsoft's, from the Microsoft Flight Simulator 2024 SDK, redistributed with the hangar under the
+SDK licence (built into the exe by `build.ps1`, which needs the SDK installed for release builds).
 
 ## Build and test
 ```

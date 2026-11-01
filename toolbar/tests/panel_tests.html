@@ -1,0 +1,78 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Jetstream Hangar toolbar panel tests</title>
+<link rel="stylesheet" href="JetstreamHangar.css">
+<style>body{background:#0d141b;color:#e3e8ed;font:13px monospace} #panel{width:360px;border:1px solid #333;margin:10px 0} pre{white-space:pre-wrap}</style>
+</head><body>
+<!-- Logic tests for JetstreamHangar.js outside the sim: SimVar is a stand-in, fetch is stubbed.
+     Copy this page next to JetstreamHangar.js / .css and open it through any local web server. -->
+<div id="panel"><div id="jh-root" class="jh"></div></div>
+<pre id="out">running...</pre>
+<script>
+window.fake = {};
+window.SimVar = { GetSimVarValue: function (n) { return fake[n] === undefined ? 0 : fake[n]; }, SetSimVarValue: function (n, u, v) { fake[n] = v; } };
+window.pingOk = true;
+window.fetch = function (url) { return pingOk ? Promise.resolve({ ok: true, json: function () { return Promise.resolve({ app: "Jetstream Hangar", version: "1.0.6" }); } }) : Promise.reject(new Error("refused")); };
+</script>
+<script src="JetstreamHangar.js"></script>
+<script>
+var results = [];
+function ok(c, m) { results.push((c ? "PASS  " : "FAIL  ") + m); }
+var root = document.getElementById("jh-root"), h = JH_HANGARS[0];
+// distance
+ok(Math.abs(JHPanel.dist(48.5, -123, 48.5, -123)) < 1e-6, "zero distance");
+ok(Math.abs(JHPanel.dist(0, 0, 1, 0) - 111195) < 50, "1 deg latitude = 111.2 km");
+ok(JHPanel.distText(250) === "250 m" && JHPanel.distText(1852 * 3.21) === "3.2 nm" && JHPanel.distText(1852 * 312.4) === "312 nm", "distance texts");
+// door: nothing set
+ok(JHPanel.doorPos() === 0 && JHPanel.doorTarget() === 0 && JHPanel.doorState() === "Closed", "nothing set: closed");
+JHPanel.setTarget(100); ok(fake["L:JV_HANGAR_DOOR_TARGET"] === 100, "OPEN sets the target to 100");
+ok(fake["L:JV_HANGAR_DOOR"] === undefined, "the panel does not move the door itself");
+fake["L:JV_HANGAR_DOOR"] = 41.6; ok(JHPanel.doorState() === "Opening 42 %", "opening state: " + JHPanel.doorState());
+fake["L:JV_HANGAR_DOOR"] = 100; ok(JHPanel.doorState() === "Open", "open");
+JHPanel.setTarget(0); fake["L:JV_HANGAR_DOOR"] = 70; ok(JHPanel.doorState() === "Closing 70 %", "closing state");
+fake["L:JV_HANGAR_DOOR"] = 130; ok(JHPanel.doorPos() === 100, "position clamped high");
+fake["L:JV_HANGAR_DOOR"] = NaN; ok(JHPanel.doorPos() === 0, "NaN position reads 0");
+fake["L:JV_HANGAR_DOOR_TARGET"] = 63; ok(JHPanel.doorTarget() === 100, "odd target reads as open");
+JHPanel.setTarget(37); ok(fake["L:JV_HANGAR_DOOR_TARGET"] === 0, "target is always 0 or 100");
+// hangar list and rendering
+fake["PLANE LATITUDE"] = h.lat; fake["PLANE LONGITUDE"] = h.lon; fake["L:JV_HANGAR_DOOR"] = 0; fake["L:JV_HANGAR_DOOR_TARGET"] = 0;
+var list = JHPanel.hangars(); ok(list.length === JH_HANGARS.length && list[0].d < 1, "nearest hangar first, at the hangar 0 m");
+var app = { ok: true, version: "1.0.6", checked: 0 };
+JHPanel.render(root, app);
+ok(root.querySelector(".jh-app.ok") && /1\.0\.6 connected/.test(root.textContent), "app shown as connected");
+ok(/JV Hangar KFHR/.test(root.textContent) && /Closed/.test(root.textContent), "hangar and door state shown");
+var open = root.querySelector("button[data-t='100']"); open.click();
+ok(fake["L:JV_HANGAR_DOOR_TARGET"] === 100, "clicking OPEN sets the target");
+ok(root.querySelector("button[data-t='100']").className === "on", "OPEN highlighted after the click (re-rendered)");
+fake["L:JV_HANGAR_DOOR"] = 50; JHPanel.render(root, app);
+ok(root.querySelector(".jh-state.moving") && root.querySelector(".jh-bar i").style.width === "50%", "moving state and bar at 50 %");
+JHPanel.render(root, { ok: false, version: "", checked: 0 });
+ok(root.querySelector(".jh-app.off") && /not running/.test(root.textContent), "app shown as not running");
+fake["PLANE LATITUDE"] = 52.3; fake["PLANE LONGITUDE"] = 4.76; JHPanel.render(root, app);
+ok(/nm/.test(root.querySelector(".jh-head em").textContent), "far away: distance in nm (" + root.querySelector(".jh-head em").textContent + ")");
+JH_HANGARS[0].name = "<b>x</b>"; JHPanel.render(root, app); ok(root.querySelector(".jh-head b").textContent === "<b>x</b>", "names are escaped"); JH_HANGARS[0].name = "JV Hangar KFHR";
+// hangar lights
+fake["L:JV_HANGAR_LIGHTS"] = undefined; delete fake["L:JV_HANGAR_LIGHTS"];
+ok(JHPanel.lightsMode() === 0, "lights: nothing set reads AUTO");
+JHPanel.setLights(1); ok(fake["L:JV_HANGAR_LIGHTS"] === 1 && JHPanel.lightsMode() === 1, "lights ON");
+JHPanel.setLights(2); ok(JHPanel.lightsMode() === 2, "lights OFF");
+JHPanel.setLights(7); ok(fake["L:JV_HANGAR_LIGHTS"] === 0, "unknown mode falls back to AUTO");
+fake["L:JV_HANGAR_LIGHTS"] = 1.2; ok(JHPanel.lightsMode() === 1, "rounded L-var reads ON");
+fake["L:JV_HANGAR_LIGHTS"] = 0; JHPanel.render(root, app);
+ok(root.querySelectorAll("button[data-l]").length === 3 && root.querySelector("button[data-l='0']").className === "on", "three light buttons, AUTO highlighted");
+root.querySelector("button[data-l='2']").click();
+ok(fake["L:JV_HANGAR_LIGHTS"] === 2 && root.querySelector("button[data-l='2']").className === "on", "clicking OFF switches the lights off");
+ok(fake["L:JV_HANGAR_DOOR_TARGET"] === 100, "the light buttons leave the door alone");
+// app ping: rate limited, failure marks it off
+var a2 = { ok: false, version: "", checked: 0 };
+JHPanel.pingApp(a2, function () {
+    ok(a2.ok && a2.version === "1.0.6", "ping fills the version");
+    var t = a2.checked; pingOk = false; JHPanel.pingApp(a2); ok(a2.checked === t && a2.ok, "second ping within 5 s is skipped");
+    a2.checked = 0; JHPanel.pingApp(a2, function () {
+        ok(!a2.ok, "failed ping: not connected");
+        var fails = results.filter(function (r) { return r.indexOf("FAIL") === 0; }).length;
+        document.getElementById("out").textContent = results.length + " checks, " + fails + " failed\n" + results.join("\n");
+        window.testDone = { checks: results.length, failed: fails };
+    });
+});
+</script>
+</body></html>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SimBase.Document Type="InGamePanels" version="1,0">
+	<Filename>jetstream-hangar-toolbar.spb</Filename>
+	<InGamePanels.InGamePanelDefinition
+		id="PANEL_JETSTREAM_HANGAR"
+		Name="Jetstream Hangar"
+		url="html_ui/InGamePanels/JetstreamHangar/JetstreamHangar.html"
+		icon="JETSTREAM_HANGAR_ICON">
+	</InGamePanels.InGamePanelDefinition>
+</SimBase.Document>

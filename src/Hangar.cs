@@ -79,6 +79,7 @@ static class Hangar
             }
             new Thread(ServeLoop) { IsBackground = true }.Start();
             new Thread(UpdateLoop) { IsBackground = true }.Start();
+            new Thread(SimFeed.Loop) { IsBackground = true }.Start();   // METAR cloud layers into the sim (Weather.cs)
 
             Application.EnableVisualStyles();
             tray = new NotifyIcon { Icon = AppIcon(), Text = AppName, Visible = true };
@@ -631,6 +632,16 @@ static class Library
         List<Dictionary<string, object>> list;
         try { list = List(false); } catch (Exception e) { Hangar.Log("auto-update: catalogue not available: " + e.Message); lock (gate) Waiting.Clear(); return; }
         var upd = list.Where(a => (bool)a["installed"] && (bool)a["updateAvailable"]).ToList();
+        // add-ons marked autoInstall in the catalogue (the toolbar panel) come with the hangar: installed once without
+        // asking (remembered as autoInstalled.<id>), so one the user uninstalls stays away; updates as for the aircraft
+        foreach (var a in list.Where(x => x.ContainsKey("autoInstall") && Convert.ToBoolean(x["autoInstall"])))
+        {
+            string key = "autoInstalled." + S(a, "id");
+            if (Settings.GetBool(key)) continue;
+            if ((bool)a["installed"]) { Settings.Set(key, true); Settings.Save(); continue; }
+            if (a["release"] == null) continue;
+            if (!upd.Contains(a)) upd.Add(a);
+        }
         lock (gate) Waiting.Clear();
         foreach (var a in upd)
         {
@@ -642,6 +653,7 @@ static class Library
             var err = StartInstall(S(a, "id"), true);
             if (err != null) Hangar.Notify(Hangar.AppName, "Automatic update of " + S(a, "name") + " failed: " + err);
             else if (S(Job, "state") == "error") Hangar.Notify(Hangar.AppName, "Automatic update of " + S(a, "name") + " failed: " + S(Job, "message"));
+            else if (a.ContainsKey("autoInstall") && Convert.ToBoolean(a["autoInstall"])) { Settings.Set("autoInstalled." + S(a, "id"), true); Settings.Save(); }
         }
         if (Waiting.Count > 0) Hangar.Notify("Update waiting", string.Join(", ", Waiting.ToArray()) + ": installs when Microsoft Flight Simulator is closed");
     }
@@ -862,7 +874,7 @@ static class Api
 
     // EFB endpoints may be called from the sim (any origin); everything else only from the hangar page itself.
     // Without this, any web page could change the catalogue or start installs through the browser.
-    static readonly string[] OpenPaths = { "/api/ping", "/api/aircraft/", "/api/navigraph/session", "/api/navigraph/deviceauthorization", "/api/navigraph/token" };
+    static readonly string[] OpenPaths = { "/api/ping", "/api/metar", "/api/aircraft/", "/api/navigraph/session", "/api/navigraph/deviceauthorization", "/api/navigraph/token" };
     // Navigraph account: the sim (coui:// or no Origin) and the hangar page only - a web page must never get a token
     static readonly string[] SimOrPagePaths = { "/api/navigraph/access", "/api/navigraph/login", "/api/navigraph/cancel", "/api/navigraph/logout" };
     static bool Allowed(string path, HttpListenerRequest req)
@@ -900,6 +912,7 @@ static class Api
             ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(200); Hangar.Log("quit requested"); Hangar.Quit(); });
             return;
         }
+        if (path == "/api/metar") { Metar.FetchIfDue(req.QueryString["refresh"] == "1"); Send(res, 200, Metar.Status()); return; }
         if (path == "/api/ping") { Send(res, 200, new Dictionary<string, object> { { "app", Hangar.AppName }, { "version", Hangar.AppVersion }, { "navigraph", Settings.Secret("navigraphClientId").Length > 0 }, { "navigraphAuth", true } }); return; }
         if (path == "/api/status")
         {

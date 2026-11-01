@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <!-- Jetstream Hangar toolbar panel (MSFS 2024, every aircraft). Stock window frame (<ingame-ui> + header with the
+         minimise / pop-out / close buttons); content and logic in JetstreamHangar.js. -->
+    <link rel="stylesheet" href="/SCSS/common.css" />
+    <link rel="stylesheet" href="JetstreamHangar.css" />
+    <script type="text/javascript" src="/JS/coherent.js"></script>
+    <script type="text/javascript" src="/JS/common.js"></script>
+    <script type="text/javascript" src="/JS/simvar.js"></script>
+    <script type="text/javascript" src="/JS/Services/ToolBarPanels.js"></script>
+    <link rel="import" href="/templates/NewPushButton/NewPushButton.html" />
+    <link rel="import" href="/templates/ingameUi/ingameUi.html" />
+    <link rel="import" href="/templates/ingameUiHeader/ingameUiHeader.html" />
+    <script type="text/javascript" src="JetstreamHangar.js"></script>
+</head>
+<body class="border-box">
+    <ingamepanel-jetstream-hangar>
+        <ingame-ui id="JetstreamHangarPanel" panel-id="PANEL_JETSTREAM_HANGAR" title="Jetstream Hangar"
+                   class="ingameUiFrame panelInvisible fittedContent collapsible draggable"
+                   content-fit="true" resize="both" collapsible="true" min-width="22" min-height="30"
+                   default-child-button="ingame-ui-header" vertical-navigation="ingame-ui-header, .ingameUiContent">
+            <div id="jh-root" class="jh"></div>
+        </ingame-ui>
+    </ingamepanel-jetstream-hangar>
+</body>
+</html>
