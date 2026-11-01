@@ -53,34 +53,6 @@ async function loadLibrary(refresh) {
     finally { $("#refresh").disabled = false; }
 }
 
-function techHtml(st) {
-    if (!st) return "";
-    const lvl = (v, c, w, rev) => rev ? (v <= w ? "b" : v <= c ? "w" : "") : (v >= w ? "b" : v >= c ? "w" : "");
-    const due = (h, lim) => { const r = lim - h; return [r > 0 ? r.toFixed(1) + " h left" : "overdue " + (-r).toFixed(1) + " h", r <= 0 ? "b" : r <= 10 ? "w" : ""]; };
-    const issues = [];
-    if (st.since100 > 100) issues.push("100 h inspection overdue");
-    if (st.oil < 2.5) issues.push("oil below minimum");
-    ["n", "l", "r"].forEach(k => { if (st.tyres && st.tyres[k] < 1.6) issues.push({ n: "nose", l: "left", r: "right" }[k] + " tyre soft"); });
-    if (st.damage > 0.05) issues.push("engine damage");
-    (st.defects || []).forEach(d => issues.push(d));
-    const rows = [
-        ["Airframe time", (+st.ttaf).toFixed(1) + " h", ""],
-        ["100 h inspection", ...due(st.since100, 100)],
-        ["Oil change", ...due(st.sinceOil, st.avgas > 0.5 ? 50 : 100)],
-        ["Spark plugs", ...due(st.sincePlugs, 100)],
-        ["Oil quantity", (+st.oil).toFixed(2) + " l", lvl(st.oil, 2.6, 2.0, true)],
-        ["Coolant", (+st.coolant).toFixed(2) + " l", lvl(st.coolant, 1.85, 1.6, true)],
-        ["Tyres N / L / R", st.tyres ? [st.tyres.n, st.tyres.l, st.tyres.r].map(x => (+x).toFixed(1)).join(" / ") + " bar" : "-", st.tyres && Math.min(st.tyres.n, st.tyres.l, st.tyres.r) < 1.6 ? "b" : ""],
-        ["Brake pads L / R", st.pads ? (+st.pads.l).toFixed(1) + " / " + (+st.pads.r).toFixed(1) + " mm" : "-", st.pads && Math.min(st.pads.l, st.pads.r) < 2 ? "b" : ""],
-        ["Battery", Math.round(st.battery) + " %", lvl(st.battery, 60, 25, true)],
-    ];
-    const seen = st._seen ? new Date(st._seen).toLocaleString() : "";
-    return `<div class="tech-head"><div><div class="eyebrow">Technical state</div>${seen ? `<div class="muted small">Synced from the EFB ${esc(seen)}</div>` : ""}</div>
-        <div class="aw ${issues.length ? "bad" : "ok"}">${issues.length ? "Not airworthy: " + esc(issues.join(", ")) : "Airworthy"}</div></div>
-        <div class="grid">${rows.map(r => `<div><span>${esc(r[0])}</span><span class="${r[2]}">${esc(r[1])}</span></div>`).join("")}</div>
-        <div class="log">${(st.log || []).slice(0, 12).map(e => esc(e.t + "  " + e.h + " h  " + e.text)).join("<br>")}</div>`;
-}
-
 // release notes are a CHANGELOG.md section: "### Heading", "- item" (continued on indented lines), **bold**
 function notesHtml(md) {
     const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -101,13 +73,17 @@ function notesHtml(md) {
 
 function render() {
     const host = $("#cards"); host.innerHTML = "";
-    for (const a of items) {
+    for (const a of items) host.appendChild(cardEl(a, true));
+    if (typeof renderAircraft === "function") renderAircraft();
+}
+
+// one aircraft card; with 'bay' the aircraft stands in its hangar bay (the aircraft page shows a larger bay itself)
+function cardEl(a, bay) {
         const el = $("#cardTpl").content.firstElementChild.cloneNode(true);
         el.dataset.id = a.id;
-        // the whole picture is shown (contain), never cropped
-        const th = $(".thumb", el), img = $("img", th);
-        if (a.image) { img.src = a.image; img.alt = a.name; img.onerror = () => { img.remove(); th.classList.add("empty"); }; }
-        else { img.remove(); th.classList.add("empty"); }
+        const th = $(".thumb", el);
+        if (bay) { th.outerHTML = bayHtml(a, false); const nb = $(".bay", el); nb.onclick = () => openAircraft(a.id); nb.title = "Open the aircraft page"; }
+        else { th.remove(); el.classList.add("noimg"); }
         $("h2", el).textContent = a.name;
         $(".maker", el).textContent = a.manufacturer || "";
         $(".desc", el).textContent = a.description || "";
@@ -125,13 +101,18 @@ function render() {
         }
         if (a.installed) btn("Uninstall", "danger", () => uninstall(a));
         if (a.release && a.release.notes) { $(".notes", el).classList.remove("hidden"); $(".notes .md", el).innerHTML = notesHtml(a.release.notes); }
-        if (a.state) { const t = $(".tech", el); t.classList.remove("hidden"); t.innerHTML = techHtml(a.state); }
-        if (job.id === a.id && job.state !== "idle") showJob(el);
-        host.appendChild(el);
-    }
+        if (bay) btn("Open aircraft page", "secondary", () => openAircraft(a.id));
+        if (a.state && bay) { const t = $(".tech", el); t.classList.remove("hidden"); t.innerHTML = techSummary(a.state); }
+        if (job.id === a.id && job.state !== "idle") showJobOne(el);
+        return el;
 }
 
+// the same aircraft can be on the fleet list and on its own page: progress shows on every copy
 function showJob(el) {
+    const id = el && el.dataset ? el.dataset.id : job.id;
+    document.querySelectorAll('.card[data-id="' + id + '"]').forEach(showJobOne);
+}
+function showJobOne(el) {
     const p = $(".progress", el);
     p.classList.remove("hidden");
     $(".bar", p).style.width = (job.state === "done" ? 100 : job.percent || 0) + "%";

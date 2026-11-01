@@ -1,0 +1,103 @@
+/* Aircraft page and hangar bay (aircraft.js). Uses the tokens of style.css. */
+
+/* ---------- hangar bay: the aircraft standing in its bay ---------- */
+.bay { position: relative; overflow: hidden; min-height: 230px; cursor: pointer; isolation: isolate;
+  /* corrugated back wall under a warm work light */
+  background:
+    radial-gradient(70% 55% at 50% 0%, rgba(255, 236, 196, .16), transparent 70%),
+    repeating-linear-gradient(90deg, #1a222b 0 13px, #222c37 13px 15px, #1b232c 15px 28px);
+  border-right: 1px solid var(--rule); }
+.bay.big { min-height: 0; aspect-ratio: 16 / 7; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 18px; cursor: default; }
+.bay .truss { position: absolute; left: 0; right: 0; top: 0; height: 15%; z-index: 1; }
+.bay .truss path { fill: none; stroke: #33404d; stroke-width: 3; vector-effect: non-scaling-stroke; }
+.bay .lamps { position: absolute; left: 0; right: 0; top: 13%; display: flex; justify-content: space-around; z-index: 2; }
+.bay .lamps i { width: 46px; height: 6px; border-radius: 3px; background: #fff3d6; box-shadow: 0 0 18px 6px rgba(255, 228, 170, .35), 0 30px 80px 30px rgba(255, 228, 170, .07); }
+.bay:not(.big) .lamps i { width: 26px; height: 4px; }
+.bay .wall-mark { position: absolute; right: 4%; top: 22%; font: 600 13px var(--mono); letter-spacing: .3em; color: rgba(227, 232, 237, .2); z-index: 1; }
+.bay.big .wall-mark { font-size: 22px; right: auto; left: 4%; }
+/* epoxy floor with a painted bay line, lit from above */
+.bay .floor { position: absolute; left: 0; right: 0; bottom: 0; height: 36%; z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(255, 236, 196, .06), transparent 60%),
+    linear-gradient(180deg, #2b3138 0%, #1c2127 55%, #15191e 100%);
+  border-top: 2px solid #3a4550; }
+.bay .floor::before { content: ""; position: absolute; left: 6%; right: 6%; top: 34%; height: 3px; background: repeating-linear-gradient(90deg, #c9a227 0 34px, transparent 34px 52px); opacity: .55; }
+.bay .floor::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(0, 0, 0, .25) calc(25% - 1px) 25%); opacity: .5; }
+.bay .plane { position: absolute; left: 50%; bottom: 13%; width: 84%; transform: translateX(-50%); z-index: 3; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .45)); }
+.bay .plane.mirror { bottom: auto; top: 87%; transform: translateX(-50%) scaleY(-1); opacity: .12; filter: blur(1px); z-index: 2;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 30%); mask-image: linear-gradient(180deg, #000, transparent 30%); }
+.bay .shadow { position: absolute; left: 50%; bottom: 10%; width: 62%; height: 8%; transform: translateX(-50%); border-radius: 50%; z-index: 2;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .55), transparent); }
+.bay.empty::after { content: ""; position: absolute; inset: 0; z-index: 3; background: url(logo.svg) center / 64px no-repeat; opacity: .3; }
+.bay:hover .plane { filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .45)) brightness(1.05); }
+.card .bay { min-height: 240px; }
+.card.noimg { grid-template-columns: 1fr; }
+
+/* ---------- aircraft page ---------- */
+.linkbtn { background: none; border: 0; color: var(--accent); padding: 0; margin-bottom: 8px; font: 500 13px var(--sans); cursor: pointer; }
+.linkbtn:hover { background: none; text-decoration: underline; }
+.subtabs { display: flex; flex-direction: row; padding: 0; gap: 2px; border-bottom: 1px solid var(--rule); margin-bottom: 20px; flex-wrap: wrap; }   /* not the sidebar 'nav' column */
+.subtabs button { width: auto; }
+.subtabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--text-2); padding: 10px 14px; font: 500 13.5px var(--sans); }
+.subtabs button:hover { background: none; color: var(--text); }
+.subtabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; }
+.panel h3 { margin: 0 0 14px; }
+#acBody > .card + .panel { margin-top: 18px; }
+.gcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+.empty-note { padding: 28px 0; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0; border: 1px solid var(--rule); border-radius: 4px; margin-top: 4px; }
+.kv > div { padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+.kv > div + div { border-left: 1px solid var(--rule); }
+.kv span { font: 500 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.kv b { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.kv.big b { font-size: 18px; }
+.kv.totals { margin-bottom: 16px; }
+.aw-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.defects { margin: 12px 0 0; padding-left: 18px; color: var(--bad); }
+
+/* gauge bar: the value against coloured zones, with marks for the limits */
+.gbar { padding: 8px 0 12px; }
+.gbar + .gbar { border-top: 1px solid var(--rule); }
+.gtop { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.gname { font-weight: 500; }
+.gval { font: 500 13.5px var(--mono); font-variant-numeric: tabular-nums; }
+.gbar.warn .gval { color: var(--warn); }
+.gbar.bad .gval { color: var(--bad); }
+.gtrack { position: relative; height: 8px; border-radius: 4px; background: var(--surface-2); margin: 0 2px 18px; }
+.gtrack .z { position: absolute; top: 0; bottom: 0; opacity: .55; }
+.gtrack .z:first-child { border-radius: 4px 0 0 4px; }
+.gtrack .z.ok { background: #2f7d55; }
+.gtrack .z.warn { background: #9a6f22; }
+.gtrack .z.bad { background: #9b3a2f; }
+.gtrack .m { position: absolute; top: -3px; bottom: -3px; width: 1px; background: #8c99a6; }
+.gtrack .m b { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font: 500 9.5px var(--mono); letter-spacing: .06em; color: var(--muted); white-space: nowrap; }
+.gtrack .needle { position: absolute; top: -5px; width: 4px; height: 18px; margin-left: -2px; border-radius: 2px; background: var(--text); box-shadow: 0 0 0 2px var(--surface); }
+.gbar.warn .needle { background: var(--warn); }
+.gbar.bad .needle { background: var(--bad); }
+.gsub { font-size: 12px; color: var(--muted); margin-top: -4px; }
+
+/* logbooks */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.log-table th { font: 500 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.log-table td { padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.log-table tr:last-child td { border-bottom: 0; }
+.log-table tbody tr:hover td { background: #17202a; }
+.log-table .r { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* failures */
+.rates { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+.rate { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--rule-2); border-radius: 4px; cursor: pointer; font-weight: 400; }
+.rate input { display: none; }
+.rate b { font-weight: 600; }
+.rate span { font-size: 12px; color: var(--muted); }
+.rate.on { border-color: var(--accent); background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.when { display: grid; gap: 8px; margin: 12px 0; }
+input.num { width: 70px; padding: 5px 8px; }
+.flist { list-style: none; margin: 0 0 12px; padding: 0; }
+.flist li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.flist li span:first-child { flex: 1; }
+.small-btn { padding: 4px 10px; font-size: 12px; }
+.panel label { margin-bottom: 4px; }
+@media (max-width: 860px) { .bay.big { aspect-ratio: 16 / 9; } .rates { grid-template-columns: 1fr; } }

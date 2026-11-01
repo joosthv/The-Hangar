@@ -513,6 +513,38 @@ Section "API security (browser pages cannot drive the hangar)"
     Check ($byFolder["linked-scenery"].linked -eq $true -and $byFolder["linked-scenery"].title -eq "Linked Scenery") "linked folder followed and flagged"
     Check ((Call POST "/api/open-package" '{"folder":"..\\..\\Windows"}').status -eq 400) "open-package refuses paths outside the Community folder"
     Check ((Call POST "/api/open-package" '{"folder":"orbx-ybbn-brisbane"}' $null "https://evil.example").status -eq 403) "a web page cannot open folders"
+
+    Section "aircraft settings, armed failures, logbook airfields"
+    $pageO = "http://localhost:$port"
+    $s0 = (Call GET "/api/aircraft/aero-at3/settings").json
+    Check ($s0.failureRate -eq "realistic" -and $s0.carbIce -eq $true -and @($s0.commands).Count -eq 0) "defaults: realistic rate, carb icing on, nothing armed"
+    Check ((Call GET "/api/aircraft/aero-at3/settings" $null $null "coui://html_ui").status -eq 200) "the aircraft (sim) reads its settings"
+    Check ((Call POST "/api/aircraft/aero-at3/settings" '{"failureRate":"training"}' $null "https://evil.example").status -eq 403) "a web page cannot change the failure rate"
+    Check ((Call POST "/api/aircraft/aero-at3/failures" '{"id":"engine","minutes":0}' $null "coui://html_ui").status -eq 403) "the sim cannot arm failures"
+    $r = Call POST "/api/aircraft/aero-at3/settings" '{"failureRate":"training","carbIce":false}' $null $pageO
+    Check ($r.status -eq 200 -and $r.json.failureRate -eq "training" -and $r.json.carbIce -eq $false) "rate and carb icing saved from the hangar page"
+    Check ((Call POST "/api/aircraft/aero-at3/settings" '{"failureRate":"always"}' $null $pageO).status -eq 400) "unknown rate rejected"
+    $before = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $r = Call POST "/api/aircraft/aero-at3/failures" '{"id":"mag_l","minutes":0}' $null $pageO
+    $r = Call POST "/api/aircraft/aero-at3/failures" '{"id":"pitot","minutes":20}' $null $pageO
+    $cmds = @($r.json.commands); $now = $cmds | ? id -eq "mag_l"; $later = $cmds | ? id -eq "pitot"
+    Check ($cmds.Count -eq 2 -and $now.at -le [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 1000 -and $now.at -ge $before - 1000) "armed now: due immediately"
+    Check ($later.at -ge $before -and $later.at -le $before + 20 * 60000 + 1000 -and $later.window -eq 20) "armed within 20 min: a random moment in that window"
+    Check ((Call POST "/api/aircraft/aero-at3/failures" '{"id":"../../x","minutes":0}' $null $pageO).status -eq 400) "invalid failure id rejected"
+    Check ((Call POST "/api/aircraft/aero-at3/failures" '{"id":"mag_r","minutes":-5}' $null $pageO).status -eq 400) "negative minutes rejected"
+    $r = Call POST "/api/aircraft/aero-at3/repair" "" $null $pageO; Check (@($r.json.commands | ? kind -eq "repair").Count -eq 1) "workshop repair booked"
+    # the aircraft reports which commands it has taken: they disappear from the list
+    $taken = @{ ttaf = 1; fail = @{ done = @($now.cid) }; flights = @() } | ConvertTo-Json -Depth 4
+    Call POST "/api/aircraft/aero-at3/state" $taken "application/json" "coui://html_ui" | Out-Null
+    $s1 = (Call GET "/api/aircraft/aero-at3/settings").json
+    Check (@($s1.commands).Count -eq 2 -and -not (@($s1.commands) | ? cid -eq $now.cid)) "commands the aircraft has taken are dropped"
+    $r = Call POST "/api/aircraft/aero-at3/disarm" ('{"cid":"' + $later.cid + '"}') $null $pageO
+    Check ($r.status -eq 200 -and -not (@($r.json.commands) | ? cid -eq $later.cid)) "an armed failure can be disarmed"
+    Check ((Call POST "/api/aircraft/aero-at3/disarm" '{"cid":"nope"}' $null $pageO).status -eq 400) "disarming an unknown one: clear error"
+    $na = $null; $okN = WaitUntil { $script:na = (Call GET "/api/airports/nearest?pts=52.4605,5.5270;52.3080,4.7640;10,10;bad").json; $na.status -eq "ready" } 10
+    $ap = @($na.airports)
+    Check ($okN -and $ap[0].code -eq "EHLE" -and $ap[1].code -eq "EHAM") "logbook positions named after the nearest airfield (EHLE, EHAM)"
+    Check ($null -eq $ap[2] -and $null -eq $ap[3]) "no airfield within 5 km, or a bad point: none"
     StopAll
 
     # ================= "Check for updates" includes the hangar =================

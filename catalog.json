@@ -1,16 +1,140 @@
 {
-  "version": 1,
-  "aircraft": [
-    {
-      "id": "aero-at3",
-      "name": "Aero AT-3 R100",
-      "manufacturer": "Aero Sp. z o.o.",
-      "description": "Two-seat Rotax 912 trainer, study level: POH systems and flight model, EFB with checklists, performance, planner, Navigraph charts and a persistent technical state.",
-      "package": "aero-aircraft-at3",
-      "github": "joosthv/The-Hangar",
-      "tagPrefix": "at3-v",
-      "assetPrefix": "aero-aircraft-at3",
-      "image": "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3.jpg"
-    }
-  ]
+    "version":  1,
+    "aircraft":  [
+                     {
+                         "id":  "aero-at3",
+                         "name":  "Aero AT-3 R100",
+                         "manufacturer":  "Aero Sp. z o.o.",
+                         "description":  "Two-seat Rotax 912 trainer, study level: POH systems and flight model, EFB with checklists, performance, planner, Navigraph charts and a persistent technical state.",
+                         "package":  "aero-aircraft-at3",
+                         "github":  "joosthv/The-Hangar",
+                         "tagPrefix":  "at3-v",
+                         "assetPrefix":  "aero-aircraft-at3",
+                         "image":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3.jpg",
+                         "failures":  [
+                                          {
+                                              "id":  "mag_l",
+                                              "name":  "Left magneto (ignition A)",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "mag_r",
+                                              "name":  "Right magneto (ignition B)",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "mech_pump",
+                                              "name":  "Engine-driven fuel pump",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "elec_pump",
+                                              "name":  "Electric fuel pump",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "oil_leak",
+                                              "name":  "Oil leak",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "coolant_leak",
+                                              "name":  "Coolant leak",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "plug",
+                                              "name":  "Fouled spark plug (rough running)",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "engine",
+                                              "name":  "Engine failure",
+                                              "group":  "Engine"
+                                          },
+                                          {
+                                              "id":  "generator",
+                                              "name":  "Generator (no charge)",
+                                              "group":  "Electrical"
+                                          },
+                                          {
+                                              "id":  "pitot",
+                                              "name":  "Pitot blockage",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "static",
+                                              "name":  "Static port blockage",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "ah",
+                                              "name":  "Artificial horizon",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "dg",
+                                              "name":  "Directional gyro (precessing)",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "tc",
+                                              "name":  "Turn co-ordinator",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "alt",
+                                              "name":  "Altimeter (stuck)",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "tach",
+                                              "name":  "Tachometer",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "oilp_gauge",
+                                              "name":  "Oil pressure indication (sender)",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "fuel_gauge",
+                                              "name":  "Fuel quantity indication (stuck)",
+                                              "group":  "Instruments"
+                                          },
+                                          {
+                                              "id":  "com",
+                                              "name":  "COM radio (breaker trips)",
+                                              "group":  "Avionics"
+                                          },
+                                          {
+                                              "id":  "xpdr",
+                                              "name":  "Transponder (breaker trips)",
+                                              "group":  "Avionics"
+                                          },
+                                          {
+                                              "id":  "gps",
+                                              "name":  "GNS 530",
+                                              "group":  "Avionics"
+                                          },
+                                          {
+                                              "id":  "brake_l",
+                                              "name":  "Left brake",
+                                              "group":  "Airframe"
+                                          },
+                                          {
+                                              "id":  "brake_r",
+                                              "name":  "Right brake",
+                                              "group":  "Airframe"
+                                          },
+                                          {
+                                              "id":  "puncture",
+                                              "name":  "Tyre puncture (main wheel)",
+                                              "group":  "Airframe"
+                                          }
+                                      ],
+                         "cutout":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-cutout.png",
+                         "registration":  "G-MAVV"
+                     }
+                 ]
 }

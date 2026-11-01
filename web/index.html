@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="aircraft.css">
 </head>
 <body>
 <aside class="sidebar">
@@ -59,6 +60,22 @@
         aircraft EFBs use this sign-in for charts; it stays on this computer.</p>
     </section>
     <div id="cards" class="cards"></div>
+  </section>
+
+  <section id="aircraft" class="view hidden">
+    <header class="page">
+      <div><button id="acBack" class="linkbtn" type="button">&larr; Fleet</button><div id="acMaker" class="eyebrow"></div><h1 id="acName"></h1></div>
+      <div id="acState"></div>
+    </header>
+    <div id="acBay"></div>
+    <nav id="acTabs" class="subtabs">
+      <button type="button" data-sub="overview">Overview</button>
+      <button type="button" data-sub="maint">Maintenance</button>
+      <button type="button" data-sub="flights">Flight log</button>
+      <button type="button" data-sub="techlog">Technical log</button>
+      <button type="button" data-sub="fail">Failures</button>
+    </nav>
+    <div id="acBody"></div>
   </section>
 
   <section id="scenery" class="view hidden">
@@ -119,5 +136,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="qr.js"></script>
 <script src="app.js"></script>
+<script src="aircraft.js"></script>
 </body>
 </html>

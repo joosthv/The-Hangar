@@ -761,6 +761,93 @@ static class Sync
     }
 }
 
+// ---------------- per-aircraft settings: failure rate, carb icing, failures armed from the hangar ----------------
+// <data>\state\<id>-settings.json: { failureRate, carbIce, commands: [ { cid, id, at } | { cid, kind: "repair" } ] }
+// The aircraft (EFB) polls GET .../settings, takes each command once (by cid) and lists the taken ids in its state
+// (fail.done); the hangar drops commands the aircraft has taken.
+static class AircraftSettings
+{
+    public static readonly string[] Rates = { "off", "realistic", "increased", "training" };
+    static readonly object gate = new object();
+    static string File_(string id) { return Path.Combine(Hangar.DataDir, "state", Regex.Replace(id, "[^A-Za-z0-9_-]", "") + "-settings.json"); }
+    static List<Dictionary<string, object>> Commands(Dictionary<string, object> d) { return Library.Arr(d.ContainsKey("commands") ? d["commands"] : null); }
+
+    public static Dictionary<string, object> Get(string id)
+    {
+        lock (gate)
+        {
+            var d = Settings.ReadJson(File_(id)) ?? new Dictionary<string, object>();
+            if (!d.ContainsKey("failureRate") || Array.IndexOf(Rates, Convert.ToString(d["failureRate"])) < 0) d["failureRate"] = "realistic";
+            if (!d.ContainsKey("carbIce")) d["carbIce"] = true;
+            // drop commands the aircraft has already taken
+            var st = Sync.Get(id); var done = new HashSet<string>();
+            if (st != null && st.ContainsKey("fail") && st["fail"] is Dictionary<string, object>)
+            {
+                var f = (Dictionary<string, object>)st["fail"];
+                var arr = f.ContainsKey("done") ? f["done"] as System.Collections.IEnumerable : null;
+                if (arr != null) foreach (var x in arr) done.Add(Convert.ToString(x));
+            }
+            d["commands"] = Commands(d).Where(c => !done.Contains(Convert.ToString(c["cid"]))).ToArray();
+            return d;
+        }
+    }
+    static void Save(string id, Dictionary<string, object> d)
+    {
+        Directory.CreateDirectory(Path.Combine(Hangar.DataDir, "state"));
+        File.WriteAllText(File_(id), Hangar.Json.Serialize(d));
+    }
+    public static string Set(string id, Dictionary<string, object> b)
+    {
+        lock (gate)
+        {
+            var d = Get(id);
+            if (b.ContainsKey("failureRate"))
+            {
+                var r = Convert.ToString(b["failureRate"]);
+                if (Array.IndexOf(Rates, r) < 0) return "Unknown failure rate";
+                d["failureRate"] = r;
+            }
+            if (b.ContainsKey("carbIce")) d["carbIce"] = Convert.ToBoolean(b["carbIce"]);
+            Save(id, d);
+            return null;
+        }
+    }
+    // arm a failure: now (minutes 0) or at a random moment within the next 'minutes'; or a workshop repair
+    public static string Arm(string id, string failure, double minutes, bool repair)
+    {
+        lock (gate)
+        {
+            if (!repair && !Regex.IsMatch(failure ?? "", "^[a-z0-9_]{2,32}$")) return "Unknown failure";
+            if (minutes < 0 || minutes > 600 || double.IsNaN(minutes)) return "Minutes must be between 0 and 600";
+            var d = Get(id); var list = Commands(d).Select(c => (object)c).ToList();
+            if (list.Count >= 50) return "Too many armed failures";
+            var cmd = new Dictionary<string, object> { { "cid", Guid.NewGuid().ToString("N").Substring(0, 12) } };
+            if (repair) cmd["kind"] = "repair";
+            else
+            {
+                long at = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                lock (rnd) at += (long)(rnd.NextDouble() * minutes * 60000);
+                cmd["id"] = failure; cmd["at"] = at; cmd["window"] = minutes;
+            }
+            list.Add(cmd); d["commands"] = list.ToArray();
+            Save(id, d);
+            return null;
+        }
+    }
+    public static string Disarm(string id, string cid)
+    {
+        lock (gate)
+        {
+            var d = Get(id); var list = Commands(d);
+            var keep = list.Where(c => Convert.ToString(c["cid"]) != cid).Select(c => (object)c).ToArray();
+            if (keep.Length == list.Count) return "Not armed (already taken by the aircraft?)";
+            d["commands"] = keep; Save(id, d);
+            return null;
+        }
+    }
+    static readonly Random rnd = new Random();
+}
+
 // ---------------- API ----------------
 static class Api
 {
@@ -783,8 +870,15 @@ static class Api
         // DNS rebinding: the Host header must be this machine
         string host = (req.Headers["Host"] ?? "").ToLowerInvariant();
         if (host != "localhost:" + Hangar.Port && host != "127.0.0.1:" + Hangar.Port) return false;
-        if (OpenPaths.Any(p => path == p || (p.EndsWith("/") && path.StartsWith(p)))) return true;
         string origin = req.Headers["Origin"];
+        // aircraft settings and armed failures: the aircraft may read them, only the hangar page may change them
+        if (req.HttpMethod == "POST" && Regex.IsMatch(path, "^/api/aircraft/[^/]+/(settings|failures|repair|disarm)$"))
+        {
+            bool page = string.IsNullOrEmpty(origin) ? req.Headers["X-Hangar"] == "1" : (origin == "http://localhost:" + Hangar.Port || origin == "http://127.0.0.1:" + Hangar.Port);
+            if (!page) Hangar.Log("refused " + path + " from origin " + origin);
+            return page;
+        }
+        if (OpenPaths.Any(p => path == p || (p.EndsWith("/") && path.StartsWith(p)))) return true;
         if (SimOrPagePaths.Contains(path))
         {
             bool ok = string.IsNullOrEmpty(origin) || origin.StartsWith("coui://", StringComparison.OrdinalIgnoreCase) || origin == "http://localhost:" + Hangar.Port || origin == "http://127.0.0.1:" + Hangar.Port;
@@ -845,6 +939,27 @@ static class Api
             Send(res, 200, Settings.Public()); return;
         }
         if (path == "/api/open-community" && m == "POST") { if (Community.Path_.Length > 0) Process.Start("explorer.exe", "\"" + Community.Path_ + "\""); Send(res, 200, new Dictionary<string, object>()); return; }
+        // aircraft settings (failure rate, carb icing) and failures armed from the hangar
+        var am = Regex.Match(path, "^/api/aircraft/([A-Za-z0-9_-]+)/(settings|failures|repair|disarm)$");
+        if (am.Success)
+        {
+            string id = am.Groups[1].Value, what = am.Groups[2].Value, e = null;
+            if (m == "POST")
+            {
+                Dictionary<string, object> b;
+                try { b = JsonBody(req); } catch { Send(res, 400, new Dictionary<string, object> { { "error", "invalid JSON" } }); return; }
+                double minutes = 0;
+                if (what == "settings") e = AircraftSettings.Set(id, b);
+                else if (what == "failures") e = !b.ContainsKey("id") ? "Which failure?" : !double.TryParse(Convert.ToString(b.ContainsKey("minutes") ? b["minutes"] : 0, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out minutes) ? "Minutes must be a number" : AircraftSettings.Arm(id, Convert.ToString(b["id"]), minutes, false);
+                else if (what == "repair") e = AircraftSettings.Arm(id, null, 0, true);
+                else if (what == "disarm") e = AircraftSettings.Disarm(id, b.ContainsKey("cid") ? Convert.ToString(b["cid"]) : "");
+            }
+            else if (what != "settings") { Send(res, 405, new Dictionary<string, object> { { "error", "POST only" } }); return; }
+            if (e != null) { Send(res, 400, new Dictionary<string, object> { { "error", e } }); return; }
+            Send(res, 200, AircraftSettings.Get(id)); return;
+        }
+        // nearest airfields for the flight logbook: /api/airports/nearest?pts=lat,lon;lat,lon
+        if (path == "/api/airports/nearest") { Send(res, 200, AirportDb.Nearest(req.QueryString["pts"] ?? "")); return; }
         // EFB technical state: /api/aircraft/<id>/state
         var sm = Regex.Match(path, "^/api/aircraft/([A-Za-z0-9_-]+)/state$");
         if (sm.Success)
@@ -1290,6 +1405,7 @@ static class AirportDb
     public const string DefaultUrl = "https://davidmegginson.github.io/ourairports-data/airports.csv";
     static readonly object gate = new object();
     static Dictionary<string, Dictionary<string, object>> map;
+    static List<Dictionary<string, object>> all;   // every airfield once (for the nearest search)
     static bool loading; static DateTime lastTry = DateTime.MinValue; static string status = "not loaded";
     static string File_ { get { return Path.Combine(Hangar.DataDir, "airports.csv"); } }
 
@@ -1314,6 +1430,31 @@ static class AirportDb
         return new Dictionary<string, object> { { "status", m != null ? "ready" : status }, { "airports", found } };
     }
 
+    // nearest airfield within 5 km for each "lat,lon" (separated by ';'): logbook departure / arrival names
+    public static Dictionary<string, object> Nearest(string pts)
+    {
+        Lookup("");   // starts loading the list if needed
+        List<Dictionary<string, object>> l; lock (gate) l = all;
+        var res = new List<object>();
+        foreach (var p in pts.Split(';').Take(400))
+        {
+            var xy = p.Split(','); double lat, lon;
+            if (xy.Length != 2 || !double.TryParse(xy[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lat) ||
+                !double.TryParse(xy[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lon) || l == null) { res.Add(null); continue; }
+            Dictionary<string, object> best = null; double bd = 5.0;   // km
+            double cl = Math.Cos(lat * Math.PI / 180);
+            foreach (var a in l)
+            {
+                double dy = (Convert.ToDouble(a["lat"]) - lat) * 111.2, dx = (Convert.ToDouble(a["lon"]) - lon) * 111.2 * cl;
+                if (Math.Abs(dy) > bd || Math.Abs(dx) > bd) continue;
+                double d = Math.Sqrt(dx * dx + dy * dy);
+                if (d < bd) { bd = d; best = a; }
+            }
+            res.Add(best == null ? null : new Dictionary<string, object> { { "code", best["code"] }, { "name", best["name"] }, { "km", Math.Round(bd, 1) } });
+        }
+        return new Dictionary<string, object> { { "status", l != null ? "ready" : status }, { "airports", res.ToArray() } };
+    }
+
     static void Load()
     {
         try
@@ -1333,6 +1474,7 @@ static class AirportDb
                 catch (Exception e) { Hangar.Log("airport list download failed: " + e.Message); if (!File.Exists(f)) throw; }
             }
             var m = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+            var lst = new List<Dictionary<string, object>>();
             using (var sr = new StreamReader(f, Encoding.UTF8))
             {
                 var head = Csv(sr.ReadLine() ?? "");
@@ -1349,6 +1491,8 @@ static class AirportDb
                     var a = new Dictionary<string, object> { { "lat", Math.Round(lat, 4) }, { "lon", Math.Round(lon, 4) }, { "name", iName >= 0 && iName < c.Count ? c[iName] : "" } };
                     bool closed = iType >= 0 && iType < c.Count && c[iType] == "closed";
                     if (closed) a["closed"] = true;
+                    string primary = iIcao >= 0 && iIcao < c.Count && c[iIcao].Length > 0 ? c[iIcao] : (iGps >= 0 && iGps < c.Count && c[iGps].Length > 0 ? c[iGps] : c[iIdent]);
+                    if (!closed && Regex.IsMatch(primary, "^[A-Z0-9]{3,4}$")) { a["code"] = primary; a["kind"] = iType >= 0 && iType < c.Count ? c[iType] : ""; lst.Add(a); }
                     // a code belongs to the first airport that uses it, except that an open airport replaces a closed one
                     foreach (var key in new[] { iIcao >= 0 && iIcao < c.Count ? c[iIcao] : "", iGps >= 0 && iGps < c.Count ? c[iGps] : "", c[iIdent] })
                     {
@@ -1358,7 +1502,7 @@ static class AirportDb
                     }
                 }
             }
-            lock (gate) { map = m; status = "ready"; }
+            lock (gate) { map = m; all = lst; status = "ready"; }
             Hangar.Log("airport list loaded: " + m.Count + " codes");
         }
         catch (Exception e) { lock (gate) status = "unavailable: " + e.Message; Hangar.Log("airport list unavailable: " + e.Message); }

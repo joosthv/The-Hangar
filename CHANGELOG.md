@@ -4,6 +4,19 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+### Added
+- **Aircraft page** (click the aircraft or "Open aircraft page"): the aeroplane standing in its hangar bay, with
+  - **Maintenance**: every interval and quantity on a colour bar against its limits (100 h inspection, oil change,
+    plugs, carb sync, air filter, engine time to TBO, oil MIN/MAX, coolant, battery, engine condition, tyres, brake
+    pads), airworthiness and open defects;
+  - **Flight log**: date, departure and arrival airfield (named from the airport list), off / on times, block and air
+    time, landings, maximum altitude, totals;
+  - **Technical log**: the complete log with filters (maintenance, defects, exceedances, notes);
+  - **Failures**: random failure rate (Off / Realistic / Increased / Training), carburettor icing on/off, arm any
+    failure now or within x minutes (random moment), disarm, active failures reported by the aircraft, workshop
+    repair.
+- API: `/api/aircraft/<id>/settings` (aircraft reads, hangar page writes), `/failures`, `/disarm`, `/repair`,
+  `/api/airports/nearest`.
 
 ## [1.0.4] - 2026-10-31
 ### Changed
