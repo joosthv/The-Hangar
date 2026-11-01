@@ -4,6 +4,8 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 [Semantic Versioning](https://semver.org). The section of a version is used as its GitHub release notes.
 
 ## [Unreleased]
+
+## [1.0.5] - 2026-11-01
 ### Added
 - **The hangar**: every aircraft is shown standing in the Jetstream Virtual GA hangar at a small airfield (steel hangar
   with sliding doors, workbench, tool chest, shelving, compressor, tow bar and chocks), on the fleet page and as the
