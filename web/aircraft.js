@@ -7,6 +7,9 @@ const aptCache = {};
 
 // ---------- hangar bay: back wall, roof trusses, lights, floor with bay markings, the aircraft and its reflection ----------
 function bayHtml(a, big) {
+    // a rendered hangar scene (the aircraft in the Jetstream hangar: build\scene.html) when the catalogue has one
+    const photo = big ? a.scene : (a.sceneCard || a.scene);
+    if (photo) return `<div class="bay photo${big ? " big" : ""}"><img src="${esc(photo)}" alt="${esc(a.name)} in the hangar" onerror="this.closest('.bay').classList.add('empty');this.remove()"></div>`;
     const img = a.cutout || a.image || "";
     const reg = (a.registration || (a.name || "").split(" ").slice(-1)[0] || "").toUpperCase();
     return `<div class="bay${big ? " big" : ""}${img ? "" : " empty"}">

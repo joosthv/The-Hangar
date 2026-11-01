@@ -5,7 +5,10 @@ All notable changes to Jetstream Hangar. Format: [Keep a Changelog](https://keep
 
 ## [Unreleased]
 ### Added
-- **Aircraft page** (click the aircraft or "Open aircraft page"): the aeroplane standing in its hangar bay, with
+- **The hangar**: every aircraft is shown standing in the Jetstream Virtual GA hangar at a small airfield (steel hangar
+  with sliding doors, workbench, tool chest, shelving, compressor, tow bar and chocks), on the fleet page and as the
+  header of its aircraft page.
+- **Aircraft page** (click the aircraft or "Open aircraft page"): the aeroplane in its hangar, with
   - **Maintenance**: every interval and quantity on a colour bar against its limits (100 h inspection, oil change,
     plugs, carb sync, air filter, engine time to TBO, oil MIN/MAX, coolant, battery, engine condition, tyres, brake
     pads), airworthiness and open defects;

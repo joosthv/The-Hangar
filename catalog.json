@@ -134,7 +134,9 @@
                                           }
                                       ],
                          "cutout":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-cutout.png",
-                         "registration":  "G-MAVV"
+                         "registration":  "G-MAVV",
+                         "scene":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-hangar.jpg",
+                         "sceneCard":  "https://raw.githubusercontent.com/joosthv/The-Hangar/main/images/aero-at3-hangar-card.jpg"
                      }
                  ]
 }

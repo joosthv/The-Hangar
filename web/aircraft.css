@@ -31,6 +31,12 @@
 .bay.empty::after { content: ""; position: absolute; inset: 0; z-index: 3; background: url(logo.svg) center / 64px no-repeat; opacity: .3; }
 .bay:hover .plane { filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .45)) brightness(1.05); }
 .card .bay { min-height: 240px; }
+/* rendered hangar scene */
+.bay.photo { background: #c9d6e0; }
+.bay.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 40% 60%; }
+.bay.photo.big img { object-position: center; }
+.bay.photo.big { aspect-ratio: 16 / 7; }
+.bay.photo:hover img { filter: brightness(1.04); }
 .card.noimg { grid-template-columns: 1fr; }
 
 /* ---------- aircraft page ---------- */
@@ -101,3 +107,5 @@ input.num { width: 70px; padding: 5px 8px; }
 .small-btn { padding: 4px 10px; font-size: 12px; }
 .panel label { margin-bottom: 4px; }
 @media (max-width: 860px) { .bay.big { aspect-ratio: 16 / 9; } .rates { grid-template-columns: 1fr; } }
+/* on the aircraft page the header already names the aircraft */
+.card.noimg .title { display: none; }
